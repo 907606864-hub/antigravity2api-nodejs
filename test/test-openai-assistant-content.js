@@ -41,4 +41,13 @@ function getFirstModelTextPart(body) {
   assert.strictEqual(getFirstModelTextPart(body), 'hello world');
 }
 
+// Case 3: object content should not throw and should use text/content field
+{
+  const body = runCase([
+    { role: 'assistant', content: { type: 'text', text: 'object text' } },
+    { role: 'user', content: 'continue' }
+  ]);
+  assert.strictEqual(getFirstModelTextPart(body), 'object text');
+}
+
 console.log('test-openai-assistant-content passed');
