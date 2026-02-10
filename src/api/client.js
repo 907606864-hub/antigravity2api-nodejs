@@ -150,6 +150,26 @@ function buildRequesterConfig(headers, body = null) {
   return reqConfig;
 }
 
+function summarizeErrorBody(errorBody, maxLength = 160) {
+  if (errorBody === undefined || errorBody === null) return '';
+  let text = '';
+
+  if (typeof errorBody === 'string') {
+    text = errorBody;
+  } else {
+    try {
+      text = JSON.stringify(errorBody);
+    } catch {
+      text = String(errorBody);
+    }
+  }
+
+  text = text.replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+}
+
 
 // 统一错误处理
 async function handleApiError(error, token, dumpId = null) {
@@ -164,7 +184,9 @@ async function handleApiError(error, token, dumpId = null) {
     if (isCallerDoesNotHavePermission(errorBody)) {
       throw createApiError(`超出模型最大上下文。错误详情: ${errorBody}`, status, errorBody);
     }
-    tokenManager.disableCurrentToken(token);
+    const reasonDetail = summarizeErrorBody(errorBody);
+    const disableReason = reasonDetail ? `上游返回 403 无权限: ${reasonDetail}` : '上游返回 403 无权限';
+    tokenManager.disableCurrentToken(token, disableReason);
     throw createApiError(`该账号没有使用权限，已自动禁用。错误详情: ${errorBody}`, status, errorBody);
   }
 
