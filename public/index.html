@@ -14,6 +14,8 @@
             var classes = ['auth-checking'];
             if (currentTab === 'settings') classes.push('tab-settings');
             if (currentTab === 'logs') classes.push('tab-logs');
+            if (currentTab === 'geminicli') classes.push('tab-geminicli');
+            if (currentTab === 'quotaSummary') classes.push('tab-quota-summary');
             document.documentElement.className = classes.join(' ');
             // 检测字体加载
             if ('fonts' in document) {
@@ -171,6 +173,36 @@
             color: var(--text-light, #888) !important;
         }
 
+        html.tab-settings #quotaSummaryPage,
+        html.tab-logs #quotaSummaryPage,
+        html.tab-geminicli #quotaSummaryPage {
+            display: none !important;
+        }
+
+        html.tab-quota-summary #tokensPage,
+        html.tab-quota-summary #settingsPage,
+        html.tab-quota-summary #logsPage,
+        html.tab-quota-summary #geminicliPage {
+            display: none !important;
+        }
+
+        html.tab-quota-summary #quotaSummaryPage {
+            display: flex !important;
+        }
+
+        html.tab-quota-summary .tab[data-tab="tokens"],
+        html.tab-quota-summary .tab[data-tab="settings"],
+        html.tab-quota-summary .tab[data-tab="logs"],
+        html.tab-quota-summary .tab[data-tab="geminicli"] {
+            background: transparent !important;
+            color: var(--text-light, #888) !important;
+        }
+
+        html.tab-quota-summary .tab[data-tab="quotaSummary"] {
+            background: var(--primary, #4f46e5) !important;
+            color: white !important;
+        }
+
         /* 加载指示器样式 */
         #authLoading {
             display: none;
@@ -254,6 +286,8 @@
                         class="tab-icon">🎯</span><span class="tab-text">Token</span></button>
                 <button class="tab" data-tab="geminicli" onclick="switchTab('geminicli')"><span
                         class="tab-icon">💎</span><span class="tab-text">CLI</span></button>
+                <button class="tab" data-tab="quotaSummary" onclick="switchTab('quotaSummary')"><span
+                        class="tab-icon">📊</span><span class="tab-text">额度汇总</span></button>
                 <button class="tab" data-tab="settings" onclick="switchTab('settings')"><span
                         class="tab-icon">⚙️</span><span class="tab-text">设置</span></button>
                 <button class="tab" data-tab="logs" onclick="switchTab('logs')"><span
@@ -349,6 +383,64 @@
                             <div class="empty-state-text">暂无Gemini CLI Token</div>
                             <div class="empty-state-hint">点击上方OAuth按钮添加Token</div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- 额度汇总页面 -->
+                <div id="quotaSummaryPage" class="hidden">
+                    <div class="quota-summary-top-bar">
+                        <div class="quota-summary-stats">
+                            <div class="quota-summary-stat-card">
+                                <div class="quota-summary-stat-label">Token总数</div>
+                                <div class="quota-summary-stat-value" id="qsTotalTokens">0</div>
+                            </div>
+                            <div class="quota-summary-stat-card">
+                                <div class="quota-summary-stat-label">有额度数据</div>
+                                <div class="quota-summary-stat-value" id="qsWithQuotaTokens">0</div>
+                            </div>
+                            <div class="quota-summary-stat-card">
+                                <div class="quota-summary-stat-label">模型数量</div>
+                                <div class="quota-summary-stat-value" id="qsModelCount">0</div>
+                            </div>
+                            <div class="quota-summary-stat-card danger">
+                                <div class="quota-summary-stat-label">含耗尽模型</div>
+                                <div class="quota-summary-stat-value" id="qsExhaustedModelCount">0</div>
+                            </div>
+                        </div>
+                        <div class="quota-summary-actions">
+                            <input type="text" id="quotaSummaryModelFilter" placeholder="搜索模型..."
+                                autocomplete="off">
+                            <label class="quota-summary-checkbox">
+                                <input type="checkbox" id="quotaSummaryIncludeDisabled">
+                                <span>包含禁用</span>
+                            </label>
+                            <button type="button" id="quotaSummaryRefreshBtn" class="btn btn-info btn-sm">🔄 刷新汇总</button>
+                        </div>
+                    </div>
+                    <div class="quota-summary-meta">
+                        <span id="quotaSummaryGeneratedAt">更新时间: --</span>
+                        <span id="quotaSummaryRefreshStats">刷新统计: --</span>
+                    </div>
+                    <div class="quota-summary-table-wrap">
+                        <table class="quota-summary-table">
+                            <thead>
+                                <tr>
+                                    <th>模型</th>
+                                    <th>平均剩余</th>
+                                    <th>耗尽账号</th>
+                                    <th>平均恢复(耗尽)</th>
+                                    <th>最早恢复</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="quotaSummaryTableBody">
+                                <tr>
+                                    <td colspan="6">
+                                        <div class="empty-state-small">正在加载汇总数据...</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
 
@@ -740,6 +832,7 @@
     <script src="js/config.js" defer></script>
     <script src="js/security.js" defer></script>
     <script src="js/logs.js" defer></script>
+    <script src="js/quota-summary.js" defer></script>
     <script src="js/main.js" defer></script>
 </body>
 

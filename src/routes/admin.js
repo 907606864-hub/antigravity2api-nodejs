@@ -14,6 +14,7 @@ import { getModelsWithQuotas } from '../api/client.js';
 import { getEnvPath } from '../utils/paths.js';
 import ipBlockManager from '../utils/ipBlockManager.js';
 import dotenv from 'dotenv';
+import { summarizeQuotaByModel } from '../utils/quotaSummary.js';
 
 const envPath = getEnvPath();
 
@@ -964,6 +965,175 @@ router.delete('/whitelist-ip', cookieAuthMiddleware, async (req, res) => {
 // ==================== Token 额度 API ====================
 
 // 获取指定Token的模型额度（使用 tokenId）
+function toPositiveInt(value, fallback, min = 1, max = 20) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function toIsoFromMs(ms) {
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+function toBeijingTextFromMs(ms) {
+  if (!Number.isFinite(ms)) return '--';
+  return quotaManager.convertToBeijingTime(new Date(ms).toISOString());
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) return;
+
+  const safeConcurrency = toPositiveInt(concurrency, 5, 1, 20);
+  let index = 0;
+
+  const runners = Array.from({ length: Math.min(safeConcurrency, list.length) }, async () => {
+    while (true) {
+      const current = index;
+      index += 1;
+      if (current >= list.length) break;
+      await worker(list[current], current);
+    }
+  });
+
+  await Promise.all(runners);
+}
+
+async function resolveTokenQuotaSnapshot(tokenId, { forceRefresh = false, fetchIfMissing = true } = {}) {
+  let tokenData = await tokenManager.findTokenById(tokenId);
+  if (!tokenData) {
+    return { found: false, quotaData: { lastUpdated: null, models: {} }, refreshed: false };
+  }
+
+  const isDisabled = tokenData.enable === false;
+  let quotaData = quotaManager.getQuota(tokenId);
+  let refreshed = false;
+
+  if (!isDisabled) {
+    if (tokenManager.isExpired(tokenData)) {
+      tokenData = await tokenManager.refreshToken(tokenData);
+    }
+
+    if (forceRefresh) {
+      quotaData = null;
+    }
+
+    if (!quotaData && fetchIfMissing) {
+      const quotas = await getModelsWithQuotas(tokenData);
+      quotaManager.updateQuota(tokenId, quotas);
+      quotaData = quotaManager.getQuota(tokenId) || { lastUpdated: Date.now(), models: quotas };
+      refreshed = true;
+    }
+  }
+
+  if (!quotaData) {
+    quotaData = { lastUpdated: null, models: {} };
+  }
+
+  return { found: true, quotaData, refreshed };
+}
+
+router.get('/quotas/summary', cookieAuthMiddleware, async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === 'true';
+    const includeDisabled = req.query.includeDisabled === 'true';
+    const fetchIfMissing = req.query.fetchMissing !== 'false';
+    const concurrency = toPositiveInt(req.query.concurrency, 5, 1, 20);
+
+    const allTokens = await tokenManager.getTokenList();
+    const scopedTokens = includeDisabled ? allTokens : allTokens.filter(token => token.enable !== false);
+    const quotaByTokenId = {};
+    const failedTokens = [];
+    let refreshedCount = 0;
+
+    await mapWithConcurrency(scopedTokens, concurrency, async (tokenMeta) => {
+      try {
+        const snapshot = await resolveTokenQuotaSnapshot(tokenMeta.id, {
+          forceRefresh,
+          fetchIfMissing
+        });
+
+        if (!snapshot.found) {
+          quotaByTokenId[tokenMeta.id] = {};
+          failedTokens.push({
+            tokenId: tokenMeta.id,
+            email: tokenMeta.email || null,
+            reason: 'token_not_found'
+          });
+          return;
+        }
+
+        quotaByTokenId[tokenMeta.id] = snapshot.quotaData.models || {};
+        if (snapshot.refreshed) refreshedCount += 1;
+      } catch (error) {
+        quotaByTokenId[tokenMeta.id] = {};
+        failedTokens.push({
+          tokenId: tokenMeta.id,
+          email: tokenMeta.email || null,
+          reason: error.message
+        });
+      }
+    });
+
+    const summary = summarizeQuotaByModel(scopedTokens, quotaByTokenId, Date.now());
+
+    const models = summary.models.map((item) => {
+      const avgResetTimeRaw = toIsoFromMs(item.avgResetMs);
+      const avgResetTimeExhaustedRaw = toIsoFromMs(item.avgResetMsExhausted);
+      const earliestResetTimeRaw = toIsoFromMs(item.earliestResetMs);
+      const latestResetTimeRaw = toIsoFromMs(item.latestResetMs);
+
+      return {
+        ...item,
+        avgResetTimeRaw,
+        avgResetTime: toBeijingTextFromMs(item.avgResetMs),
+        avgResetTimeExhaustedRaw,
+        avgResetTimeExhausted: toBeijingTextFromMs(item.avgResetMsExhausted),
+        earliestResetTimeRaw,
+        earliestResetTime: toBeijingTextFromMs(item.earliestResetMs),
+        latestResetTimeRaw,
+        latestResetTime: toBeijingTextFromMs(item.latestResetMs)
+      };
+    });
+
+    const detailsByModel = {};
+    Object.entries(summary.detailsByModel).forEach(([modelId, detail]) => {
+      detailsByModel[modelId] = {
+        tokenCount: detail.tokenCount,
+        exhaustedCount: detail.exhaustedCount,
+        entries: detail.entries.map((entry) => ({
+          ...entry,
+          resetTime: entry.resetTimeRaw ? quotaManager.convertToBeijingTime(entry.resetTimeRaw) : '--'
+        }))
+      };
+    });
+
+    const tokenStats = {
+      ...summary.tokenStats,
+      totalTokensAll: allTokens.length,
+      includedTokens: scopedTokens.length
+    };
+
+    res.json({
+      success: true,
+      data: {
+        generatedAt: Date.now(),
+        tokenStats,
+        models,
+        detailsByModel,
+        refreshStats: {
+          refreshedCount,
+          failedCount: failedTokens.length,
+          failedTokens
+        }
+      }
+    });
+  } catch (error) {
+    logger.error('获取聚合额度失败:', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/tokens/:tokenId/quotas', cookieAuthMiddleware, async (req, res) => {
   try {
     const { tokenId } = req.params;

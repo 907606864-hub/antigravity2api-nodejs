@@ -148,13 +148,15 @@ function hideLoading() {
 
 function switchTab(tab, saveState = true) {
     // 更新html元素的class以防止闪烁
-    document.documentElement.classList.remove('tab-settings', 'tab-logs', 'tab-geminicli');
+    document.documentElement.classList.remove('tab-settings', 'tab-logs', 'tab-geminicli', 'tab-quota-summary');
     if (tab === 'settings') {
         document.documentElement.classList.add('tab-settings');
     } else if (tab === 'logs') {
         document.documentElement.classList.add('tab-logs');
     } else if (tab === 'geminicli') {
         document.documentElement.classList.add('tab-geminicli');
+    } else if (tab === 'quotaSummary') {
+        document.documentElement.classList.add('tab-quota-summary');
     }
 
     // 移除所有tab的active状态
@@ -170,6 +172,7 @@ function switchTab(tab, saveState = true) {
     const settingsPage = document.getElementById('settingsPage');
     const logsPage = document.getElementById('logsPage');
     const geminicliPage = document.getElementById('geminicliPage');
+    const quotaSummaryPage = document.getElementById('quotaSummaryPage');
 
     // 隐藏所有页面并移除动画类
     tokensPage.classList.add('hidden');
@@ -183,6 +186,10 @@ function switchTab(tab, saveState = true) {
     if (geminicliPage) {
         geminicliPage.classList.add('hidden');
         geminicliPage.classList.remove('page-enter');
+    }
+    if (quotaSummaryPage) {
+        quotaSummaryPage.classList.add('hidden');
+        quotaSummaryPage.classList.remove('page-enter');
     }
 
     // 清理日志页面的自动刷新（如果离开日志页面）
@@ -228,6 +235,15 @@ function switchTab(tab, saveState = true) {
                 initGeminiCliPage();
             }
         }
+    } else if (tab === 'quotaSummary') {
+        if (quotaSummaryPage) {
+            quotaSummaryPage.classList.remove('hidden');
+            void quotaSummaryPage.offsetWidth;
+            quotaSummaryPage.classList.add('page-enter');
+            if (typeof initQuotaSummaryPage === 'function' && isLoggedIn) {
+                initQuotaSummaryPage();
+            }
+        }
     }
 
     // 保存当前Tab状态到localStorage
@@ -239,7 +255,7 @@ function switchTab(tab, saveState = true) {
 // 恢复Tab状态
 function restoreTabState() {
     const savedTab = localStorage.getItem('currentTab');
-    if (savedTab && (savedTab === 'tokens' || savedTab === 'settings' || savedTab === 'logs' || savedTab === 'geminicli')) {
+    if (savedTab && (savedTab === 'tokens' || savedTab === 'settings' || savedTab === 'logs' || savedTab === 'geminicli' || savedTab === 'quotaSummary')) {
         switchTab(savedTab, false);
     }
 }
