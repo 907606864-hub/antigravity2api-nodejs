@@ -40,15 +40,16 @@ export function sanitizeToolName(name) {
 const EXCLUDED_KEYS = new Set([
   '$schema', 'additionalProperties', 'minLength', 'maxLength',
   'minItems', 'maxItems', 'uniqueItems', 'exclusiveMaximum',
-  'exclusiveMinimum', 'const', 'anyOf', 'oneOf', 'allOf',
+  'exclusiveMinimum', 'const',
   'any_of', 'one_of', 'all_of', 'multipleOf',
-  // Gemini API 不支持的高级 JSON Schema 字段
+  // Unsupported advanced JSON Schema keys
   'propertyNames', 'patternProperties', 'dependencies',
   'if', 'then', 'else', 'not', 'contentMediaType', 'contentEncoding',
-  'definitions', '$defs', '$ref', '$id', '$comment'
+  'definitions', '$defs', '$ref', '$id', '$comment',
+  'nullable', 'title', 'default', 'examples'
 ]);
 
-// 需要转换为大写的 type 值映射
+// Normalize type values for Gemini-compatible schema
 const TYPE_UPPERCASE_MAP = {
   'object': 'OBJECT',
   'string': 'STRING',
@@ -58,37 +59,168 @@ const TYPE_UPPERCASE_MAP = {
   'array': 'ARRAY'
 };
 
-export function cleanParameters(obj) {
-  if (!obj || typeof obj !== 'object') return obj;
-  const cleaned = Array.isArray(obj) ? [] : {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (EXCLUDED_KEYS.has(key)) continue;
-    if (key === 'type') {
-      // 处理 type 字段
-      if (typeof value === 'string') {
-        // 字符串类型：转换为大写
-        cleaned[key] = TYPE_UPPERCASE_MAP[value.toLowerCase()] || value.toUpperCase();
-      } else if (Array.isArray(value)) {
-        // 数组类型（如 ["string", "null"]）：取第一个非 null 的类型
-        // Gemini API 不支持联合类型，需要转换为单一类型
-        const nonNullType = value.find(t => t !== 'null' && t !== null);
-        if (nonNullType && typeof nonNullType === 'string') {
-          cleaned[key] = TYPE_UPPERCASE_MAP[nonNullType.toLowerCase()] || nonNullType.toUpperCase();
-        } else {
-          // 如果都是 null 或找不到有效类型，默认为 STRING
-          cleaned[key] = 'STRING';
-        }
-      } else {
-        // 其他情况，保持原值
-        cleaned[key] = value;
-      }
-    } else {
-      cleaned[key] = (value && typeof value === 'object') ? cleanParameters(value) : value;
-    }
-  }
-  return cleaned;
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function normalizeSchemaType(typeValue) {
+  if (typeof typeValue !== 'string') return null;
+  const normalized = typeValue.trim().toLowerCase();
+  if (!normalized || normalized === 'null') return null;
+  return TYPE_UPPERCASE_MAP[normalized] || normalized.toUpperCase();
+}
+
+function normalizeTypeField(typeValue) {
+  if (typeof typeValue === 'string') {
+    return normalizeSchemaType(typeValue) || 'STRING';
+  }
+
+  if (Array.isArray(typeValue)) {
+    for (const candidate of typeValue) {
+      const normalized = normalizeSchemaType(candidate);
+      if (normalized) return normalized;
+    }
+    return 'STRING';
+  }
+
+  return typeValue;
+}
+
+function pickBestSchemaVariant(variants) {
+  if (!Array.isArray(variants) || variants.length === 0) return null;
+
+  let best = null;
+  let bestScore = -1;
+
+  for (const variant of variants) {
+    if (!isPlainObject(variant)) continue;
+
+    let normalizedType = null;
+    if (typeof variant.type === 'string') {
+      normalizedType = variant.type.trim().toLowerCase();
+    } else if (Array.isArray(variant.type)) {
+      const firstTyped = variant.type.find(v => typeof v === 'string' && v.trim().toLowerCase() !== 'null');
+      if (firstTyped) normalizedType = firstTyped.trim().toLowerCase();
+    }
+
+    let score = 0;
+    if (normalizedType === 'object' || isPlainObject(variant.properties)) score = 3;
+    else if (normalizedType === 'array' || variant.items !== undefined) score = 2;
+    else if (normalizedType) score = 1;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = variant;
+    }
+  }
+
+  return best;
+}
+
+function mergeSchemaObjects(target, source) {
+  if (!isPlainObject(target) || !isPlainObject(source)) return;
+
+  for (const [key, value] of Object.entries(source)) {
+    if (key === 'required' && Array.isArray(value)) {
+      const existing = Array.isArray(target.required) ? target.required : [];
+      target.required = Array.from(new Set([...existing, ...value.filter(v => typeof v === 'string')]));
+      continue;
+    }
+
+    if (key === 'properties' && isPlainObject(value)) {
+      target.properties = {
+        ...(isPlainObject(target.properties) ? target.properties : {}),
+        ...value
+      };
+      continue;
+    }
+
+    if (target[key] === undefined) {
+      target[key] = value;
+    }
+  }
+}
+
+export function cleanParameters(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(item => (item && typeof item === 'object') ? cleanParameters(item) : item);
+  }
+
+  const cleaned = {};
+  for (const [key, value] of Object.entries(obj)) {
+    // Flatten composed schemas before excluding unsupported keys.
+    if (key === 'allOf' || key === 'all_of') {
+      if (Array.isArray(value)) {
+        for (const variant of value) {
+          const cleanedVariant = cleanParameters(variant);
+          if (isPlainObject(cleanedVariant)) {
+            mergeSchemaObjects(cleaned, cleanedVariant);
+          }
+        }
+      }
+      continue;
+    }
+
+    if (key === 'anyOf' || key === 'oneOf' || key === 'any_of' || key === 'one_of') {
+      const bestVariant = pickBestSchemaVariant(value);
+      if (bestVariant) {
+        const cleanedVariant = cleanParameters(bestVariant);
+        if (isPlainObject(cleanedVariant)) {
+          mergeSchemaObjects(cleaned, cleanedVariant);
+        }
+      }
+      continue;
+    }
+
+    if (EXCLUDED_KEYS.has(key)) continue;
+    if (typeof key === 'string' && key.startsWith('x-')) continue;
+
+    if (key === 'type') {
+      cleaned[key] = normalizeTypeField(value);
+      continue;
+    }
+
+    if (key === 'enum' && Array.isArray(value)) {
+      cleaned[key] = value.map(v => String(v));
+      if (cleaned.type === undefined) cleaned.type = 'STRING';
+      continue;
+    }
+
+    if (key === 'required' && Array.isArray(value)) {
+      cleaned[key] = Array.from(new Set(value.filter(v => typeof v === 'string')));
+      continue;
+    }
+
+    if (key === 'format') continue;
+
+    // Support map-entry style properties: [{ key, value }, ...]
+    if (key === 'properties' && Array.isArray(value)) {
+      const mapped = {};
+      for (const item of value) {
+        if (isPlainObject(item) && typeof item.key === 'string') {
+          mapped[item.key] = cleanParameters(item.value);
+        }
+      }
+      cleaned[key] = mapped;
+      continue;
+    }
+
+    cleaned[key] = (value && typeof value === 'object') ? cleanParameters(value) : value;
+  }
+
+  if ((cleaned.type === 'OBJECT' || cleaned.type === 'object') && cleaned.properties === undefined) {
+    cleaned.properties = {};
+  }
+
+  if (isPlainObject(cleaned.properties) && Array.isArray(cleaned.required)) {
+    const propertyNames = new Set(Object.keys(cleaned.properties));
+    cleaned.required = cleaned.required.filter(name => propertyNames.has(name));
+    if (cleaned.required.length === 0) delete cleaned.required;
+  }
+
+  return cleaned;
+}
 // ==================== Model Mapping ====================
 // Map Anthropic official model names to Antigravity model names
 // Supports Claude Code and other clients that use official Anthropic model naming
