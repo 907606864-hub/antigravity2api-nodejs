@@ -27,6 +27,7 @@ import { getUpstreamStatus, readUpstreamErrorBody, isCallerDoesNotHavePermission
 import { createStreamLineProcessor } from './streamLineProcessor.js';
 import { runAxiosSseStream, runNativeSseStream, postJsonAndParse } from './geminiTransport.js';
 import { parseGeminiCandidateParts, toOpenAIUsage } from './geminiResponseParser.js';
+import { isModelUserFacing, toOpenAIModelItem } from '../utils/modelVisibility.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -87,10 +88,8 @@ const DEFAULT_MODELS = Object.freeze([
   'gemini-2.5-pro',
   'gemini-2.5-flash',
   'gemini-3-pro-low',
-  'chat_20706',
   'rev19-uic3-1p',
-  'gpt-oss-120b-medium',
-  'chat_23310'
+  'gpt-oss-120b-medium'
 ]);
 
 // 生成默认模型列表响应
@@ -98,12 +97,9 @@ function getDefaultModelList() {
   const created = Math.floor(Date.now() / 1000);
   return {
     object: 'list',
-    data: DEFAULT_MODELS.map(id => ({
-      id,
-      object: 'model',
-      created,
-      owned_by: 'google'
-    }))
+    data: DEFAULT_MODELS
+      .filter(id => isModelUserFacing(id))
+      .map(id => toOpenAIModelItem(id, created))
   };
 }
 
@@ -270,23 +266,28 @@ export async function getAvailableModels() {
   }
 
   const created = Math.floor(Date.now() / 1000);
-  const modelList = Object.keys(data.models || {}).map(id => ({
-    id,
-    object: 'model',
-    created,
-    owned_by: 'google'
-  }));
+  const rawModelEntries = Object.entries(data.models || {});
+  const hiddenUpstreamModelIds = [];
+  const modelList = [];
+
+  for (const [id, modelData] of rawModelEntries) {
+    if (!isModelUserFacing(id, modelData)) {
+      hiddenUpstreamModelIds.push(id);
+      continue;
+    }
+    modelList.push(toOpenAIModelItem(id, created));
+  }
+
+  if (hiddenUpstreamModelIds.length > 0) {
+    logger.info(`模型列表过滤了 ${hiddenUpstreamModelIds.length} 个内部/不可用模型`);
+  }
 
   // 添加默认模型（如果 API 返回的列表中没有）
   const existingIds = new Set(modelList.map(m => m.id));
   for (const defaultModel of DEFAULT_MODELS) {
+    if (!isModelUserFacing(defaultModel)) continue;
     if (!existingIds.has(defaultModel)) {
-      modelList.push({
-        id: defaultModel,
-        object: 'model',
-        created,
-        owned_by: 'google'
-      });
+      modelList.push(toOpenAIModelItem(defaultModel, created));
     }
   }
 
