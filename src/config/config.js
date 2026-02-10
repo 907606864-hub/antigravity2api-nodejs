@@ -11,6 +11,8 @@ import {
   DEFAULT_HEARTBEAT_INTERVAL,
   DEFAULT_TIMEOUT,
   DEFAULT_RETRY_TIMES,
+  DEFAULT_RETRY_FIRST_DELAY_MIN_MS,
+  DEFAULT_RETRY_STEP_MIN_MS,
   DEFAULT_MAX_REQUEST_SIZE,
   DEFAULT_MAX_IMAGES,
   MODEL_LIST_CACHE_TTL,
@@ -333,6 +335,12 @@ export function buildConfig(jsonConfig) {
     forceIPv4: jsonConfig.other?.forceIPv4 === true,
     timeout: jsonConfig.other?.timeout || DEFAULT_TIMEOUT,
     retryTimes: Number.isFinite(jsonConfig.other?.retryTimes) ? jsonConfig.other.retryTimes : DEFAULT_RETRY_TIMES,
+    retryFirstDelayMinMs: Number.isFinite(jsonConfig.other?.retryFirstDelayMinMs)
+      ? Math.max(0, jsonConfig.other.retryFirstDelayMinMs)
+      : DEFAULT_RETRY_FIRST_DELAY_MIN_MS,
+    retryStepMinMs: Number.isFinite(jsonConfig.other?.retryStepMinMs)
+      ? Math.max(0, jsonConfig.other.retryStepMinMs)
+      : DEFAULT_RETRY_STEP_MIN_MS,
     proxy: getProxyConfig(),
     // 反代系统提示词（从 .env 读取，可在前端修改，空字符串代表不使用）
     systemInstruction: process.env.SYSTEM_INSTRUCTION ?? '',

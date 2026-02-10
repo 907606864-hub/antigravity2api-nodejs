@@ -77,6 +77,20 @@ export const DEFAULT_TIMEOUT = 300000;
 export const DEFAULT_RETRY_TIMES = 3;
 
 /**
+ * 429/503 重试首轮最小等待（毫秒）
+ * 0 表示不额外抬高首轮下限（仍会应用上游显式延迟与默认退避逻辑）
+ * @type {number}
+ */
+export const DEFAULT_RETRY_FIRST_DELAY_MIN_MS = 0;
+
+/**
+ * 429/503 重试每轮额外增加的最小等待（毫秒）
+ * 0 表示不开启递增下限
+ * @type {number}
+ */
+export const DEFAULT_RETRY_STEP_MIN_MS = 0;
+
+/**
  * 默认最大请求体大小
  * @type {string}
  */
