@@ -160,12 +160,32 @@ export function toGenerationConfig(normalized, enableThinking, actualModelName) 
     }
   }
 
+  const maxOutputTokens = normalized.max_tokens || normalized.max_completion_tokens;
+
+  // Claude 的 thinking.budget_tokens 必须严格小于 max_tokens，否则会返回 400
+  if (actualEnableThinking && actualModelName && actualModelName.includes('claude')) {
+    const numericMaxOutputTokens = Number(maxOutputTokens);
+    const numericThinkingBudget = Number(thinkingBudget);
+
+    if (Number.isFinite(numericMaxOutputTokens) &&
+      Number.isFinite(numericThinkingBudget) &&
+      numericThinkingBudget >= numericMaxOutputTokens) {
+      if (numericMaxOutputTokens <= 1024) {
+        // 无法同时满足 Claude 的预算约束，降级为关闭 thinking
+        actualEnableThinking = false;
+        thinkingBudget = 0;
+      } else {
+        thinkingBudget = Math.max(1024, numericMaxOutputTokens - 1);
+      }
+    }
+  }
+
   const generationConfig = {
     topP: normalized.top_p,
     topK: normalized.top_k,
     temperature: normalized.temperature,
     candidateCount: 1,
-    maxOutputTokens: normalized.max_tokens || normalized.max_completion_tokens,
+    maxOutputTokens,
     thinkingConfig: {
       includeThoughts: actualEnableThinking,
       thinkingBudget: thinkingBudget
