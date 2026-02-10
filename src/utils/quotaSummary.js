@@ -20,7 +20,7 @@ function average(values) {
 
 /**
  * Aggregate quota data by model across tokens.
- * @param {Array<{id: string, email?: string|null, projectId?: string|null, enable?: boolean}>} tokens
+ * @param {Array<{id: string, email?: string|null, projectId?: string|null, enable?: boolean, tokenType?: string}>} tokens
  * @param {Object<string, Object<string, {r?: number, t?: string}>>} quotaByTokenId
  * @param {number} nowMs
  * @returns {{
@@ -51,6 +51,7 @@ function average(values) {
  *     exhaustedCount: number,
  *     entries: Array<{
  *       tokenId: string,
+ *       tokenType: string,
  *       email: string|null,
  *       projectId: string|null,
  *       enable: boolean,
@@ -127,6 +128,7 @@ export function summarizeQuotaByModel(tokens, quotaByTokenId, nowMs = Date.now()
 
       bucket.details.push({
         tokenId,
+        tokenType: String(token?.tokenType || token?.source || 'token'),
         email: token?.email || null,
         projectId: token?.projectId || null,
         enable,

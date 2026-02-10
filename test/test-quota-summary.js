@@ -51,6 +51,7 @@ assert.ok(g3Details, 'gemini-3-pro-high details should exist');
 assert.strictEqual(g3Details.entries.length, 2);
 assert.strictEqual(g3Details.entries[0].tokenId, 't2', 'exhausted entries should be sorted first');
 assert.strictEqual(g3Details.entries[0].isExhausted, true);
+assert.strictEqual(g3Details.entries[0].tokenType, 'token');
 assert.strictEqual(g3Details.entries[1].tokenId, 't1');
 
 console.log('test-quota-summary passed');

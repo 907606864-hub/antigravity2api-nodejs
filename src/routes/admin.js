@@ -980,6 +980,29 @@ function toBeijingTextFromMs(ms) {
   return quotaManager.convertToBeijingTime(new Date(ms).toISOString());
 }
 
+function normalizeQuotaSummarySource(rawSource) {
+  const value = String(rawSource || 'all').toLowerCase();
+  if (value === 'tokens' || value === 'token' || value === 'antigravity') return 'tokens';
+  if (value === 'geminicli' || value === 'gcli' || value === 'cli') return 'geminicli';
+  return 'all';
+}
+
+function buildQuotaSummaryTokenMeta(token, source) {
+  const normalizedSource = source === 'geminicli' ? 'geminicli' : 'tokens';
+  const lookupTokenId = token?.id;
+  const cacheTokenId = normalizedSource === 'geminicli'
+    ? `geminicli:${lookupTokenId}`
+    : lookupTokenId;
+
+  return {
+    ...token,
+    id: cacheTokenId,
+    lookupTokenId,
+    source: normalizedSource,
+    tokenType: normalizedSource === 'geminicli' ? 'geminicli' : 'token'
+  };
+}
+
 async function mapWithConcurrency(items, concurrency, worker) {
   const list = Array.isArray(items) ? items : [];
   if (list.length === 0) return;
@@ -999,19 +1022,28 @@ async function mapWithConcurrency(items, concurrency, worker) {
   await Promise.all(runners);
 }
 
-async function resolveTokenQuotaSnapshot(tokenId, { forceRefresh = false, fetchIfMissing = true } = {}) {
-  let tokenData = await tokenManager.findTokenById(tokenId);
+async function resolveTokenQuotaSnapshot(tokenMeta, { forceRefresh = false, fetchIfMissing = true } = {}) {
+  const source = tokenMeta?.source === 'geminicli' ? 'geminicli' : 'tokens';
+  const manager = source === 'geminicli' ? geminicliTokenManager : tokenManager;
+  const lookupTokenId = tokenMeta?.lookupTokenId;
+  const cacheTokenId = tokenMeta?.id;
+
+  if (!lookupTokenId || !cacheTokenId) {
+    return { found: false, quotaData: { lastUpdated: null, models: {} }, refreshed: false };
+  }
+
+  let tokenData = await manager.findTokenById(lookupTokenId);
   if (!tokenData) {
     return { found: false, quotaData: { lastUpdated: null, models: {} }, refreshed: false };
   }
 
   const isDisabled = tokenData.enable === false;
-  let quotaData = quotaManager.getQuota(tokenId);
+  let quotaData = quotaManager.getQuota(cacheTokenId);
   let refreshed = false;
 
   if (!isDisabled) {
-    if (tokenManager.isExpired(tokenData)) {
-      tokenData = await tokenManager.refreshToken(tokenData);
+    if (manager.isExpired(tokenData)) {
+      tokenData = await manager.refreshToken(tokenData);
     }
 
     if (forceRefresh) {
@@ -1020,8 +1052,8 @@ async function resolveTokenQuotaSnapshot(tokenId, { forceRefresh = false, fetchI
 
     if (!quotaData && fetchIfMissing) {
       const quotas = await getModelsWithQuotas(tokenData);
-      quotaManager.updateQuota(tokenId, quotas);
-      quotaData = quotaManager.getQuota(tokenId) || { lastUpdated: Date.now(), models: quotas };
+      quotaManager.updateQuota(cacheTokenId, quotas);
+      quotaData = quotaManager.getQuota(cacheTokenId) || { lastUpdated: Date.now(), models: quotas };
       refreshed = true;
     }
   }
@@ -1039,16 +1071,29 @@ router.get('/quotas/summary', cookieAuthMiddleware, async (req, res) => {
     const includeDisabled = req.query.includeDisabled === 'true';
     const fetchIfMissing = req.query.fetchMissing !== 'false';
     const concurrency = toPositiveInt(req.query.concurrency, 5, 1, 20);
+    const source = normalizeQuotaSummarySource(req.query.source);
 
-    const allTokens = await tokenManager.getTokenList();
-    const scopedTokens = includeDisabled ? allTokens : allTokens.filter(token => token.enable !== false);
+    const allTokens = source === 'geminicli' ? [] : await tokenManager.getTokenList();
+    const allGeminiCliTokens = source === 'tokens' ? [] : await geminicliTokenManager.getTokenList();
+
+    const scopedNormalTokens = includeDisabled
+      ? allTokens
+      : allTokens.filter(token => token.enable !== false);
+    const scopedGeminiCliTokens = includeDisabled
+      ? allGeminiCliTokens
+      : allGeminiCliTokens.filter(token => token.enable !== false);
+
+    const scopedTokens = [
+      ...scopedNormalTokens.map(token => buildQuotaSummaryTokenMeta(token, 'tokens')),
+      ...scopedGeminiCliTokens.map(token => buildQuotaSummaryTokenMeta(token, 'geminicli'))
+    ];
     const quotaByTokenId = {};
     const failedTokens = [];
     let refreshedCount = 0;
 
     await mapWithConcurrency(scopedTokens, concurrency, async (tokenMeta) => {
       try {
-        const snapshot = await resolveTokenQuotaSnapshot(tokenMeta.id, {
+        const snapshot = await resolveTokenQuotaSnapshot(tokenMeta, {
           forceRefresh,
           fetchIfMissing
         });
@@ -1057,6 +1102,7 @@ router.get('/quotas/summary', cookieAuthMiddleware, async (req, res) => {
           quotaByTokenId[tokenMeta.id] = {};
           failedTokens.push({
             tokenId: tokenMeta.id,
+            source: tokenMeta.source,
             email: tokenMeta.email || null,
             reason: 'token_not_found'
           });
@@ -1069,6 +1115,7 @@ router.get('/quotas/summary', cookieAuthMiddleware, async (req, res) => {
         quotaByTokenId[tokenMeta.id] = {};
         failedTokens.push({
           tokenId: tokenMeta.id,
+          source: tokenMeta.source,
           email: tokenMeta.email || null,
           reason: error.message
         });
@@ -1110,7 +1157,7 @@ router.get('/quotas/summary', cookieAuthMiddleware, async (req, res) => {
 
     const tokenStats = {
       ...summary.tokenStats,
-      totalTokensAll: allTokens.length,
+      totalTokensAll: allTokens.length + allGeminiCliTokens.length,
       includedTokens: scopedTokens.length
     };
 
@@ -1118,6 +1165,11 @@ router.get('/quotas/summary', cookieAuthMiddleware, async (req, res) => {
       success: true,
       data: {
         generatedAt: Date.now(),
+        sourceStats: {
+          source,
+          tokenCount: scopedNormalTokens.length,
+          geminicliCount: scopedGeminiCliTokens.length
+        },
         tokenStats,
         models,
         detailsByModel,

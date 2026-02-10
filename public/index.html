@@ -410,6 +410,11 @@
                         <div class="quota-summary-actions">
                             <input type="text" id="quotaSummaryModelFilter" placeholder="搜索模型..."
                                 autocomplete="off">
+                            <select id="quotaSummarySource">
+                                <option value="all">全部来源</option>
+                                <option value="tokens">Token</option>
+                                <option value="geminicli">GeminiCLI</option>
+                            </select>
                             <label class="quota-summary-checkbox">
                                 <input type="checkbox" id="quotaSummaryIncludeDisabled">
                                 <span>包含禁用</span>

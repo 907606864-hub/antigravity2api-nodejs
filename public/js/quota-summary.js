@@ -5,7 +5,8 @@ const quotaSummaryState = {
     loading: false,
     data: null,
     filterText: '',
-    includeDisabled: false
+    includeDisabled: false,
+    source: 'all'
 };
 
 function qsGetEl(id) {
@@ -88,6 +89,7 @@ function qsBindEvents() {
     if (quotaSummaryState.initialized) return;
 
     const filterInput = qsGetEl('quotaSummaryModelFilter');
+    const sourceSelect = qsGetEl('quotaSummarySource');
     const includeDisabledInput = qsGetEl('quotaSummaryIncludeDisabled');
     const refreshBtn = qsGetEl('quotaSummaryRefreshBtn');
 
@@ -101,6 +103,13 @@ function qsBindEvents() {
     if (includeDisabledInput) {
         includeDisabledInput.addEventListener('change', () => {
             quotaSummaryState.includeDisabled = !!includeDisabledInput.checked;
+            refreshQuotaSummary(false);
+        });
+    }
+
+    if (sourceSelect) {
+        sourceSelect.addEventListener('change', () => {
+            quotaSummaryState.source = sourceSelect.value || 'all';
             refreshQuotaSummary(false);
         });
     }
@@ -128,9 +137,13 @@ async function refreshQuotaSummary(forceRefresh = false) {
 
     const refreshBtn = qsGetEl('quotaSummaryRefreshBtn');
     const includeDisabledInput = qsGetEl('quotaSummaryIncludeDisabled');
+    const sourceSelect = qsGetEl('quotaSummarySource');
 
     if (includeDisabledInput) {
         quotaSummaryState.includeDisabled = !!includeDisabledInput.checked;
+    }
+    if (sourceSelect) {
+        quotaSummaryState.source = sourceSelect.value || 'all';
     }
 
     quotaSummaryState.loading = true;
@@ -147,6 +160,7 @@ async function refreshQuotaSummary(forceRefresh = false) {
         const params = new URLSearchParams();
         params.set('refresh', forceRefresh ? 'true' : 'false');
         params.set('includeDisabled', quotaSummaryState.includeDisabled ? 'true' : 'false');
+        params.set('source', quotaSummaryState.source || 'all');
         params.set('fetchMissing', 'true');
         params.set('concurrency', '5');
 
@@ -209,6 +223,7 @@ function qsRenderMeta() {
     const data = quotaSummaryState.data || {};
     const generatedAtEl = qsGetEl('quotaSummaryGeneratedAt');
     const refreshStatsEl = qsGetEl('quotaSummaryRefreshStats');
+    const sourceStats = data.sourceStats || {};
 
     if (generatedAtEl) {
         generatedAtEl.textContent = `更新时间: ${qsFormatDateTime(data.generatedAt)}`;
@@ -217,7 +232,9 @@ function qsRenderMeta() {
     if (refreshStatsEl) {
         const refreshedCount = Number(data?.refreshStats?.refreshedCount || 0);
         const failedCount = Number(data?.refreshStats?.failedCount || 0);
-        refreshStatsEl.textContent = `刷新统计: 已刷新 ${refreshedCount} 个，失败 ${failedCount} 个`;
+        const tokenCount = Number(sourceStats?.tokenCount || 0);
+        const geminicliCount = Number(sourceStats?.geminicliCount || 0);
+        refreshStatsEl.textContent = `刷新统计: 已刷新 ${refreshedCount} 个，失败 ${failedCount} 个 | 来源 Token ${tokenCount} / CLI ${geminicliCount}`;
     }
 }
 
@@ -301,13 +318,15 @@ function closeQuotaSummaryDetailModal() {
 
 function qsRenderDetailRows(entries) {
     if (!Array.isArray(entries) || entries.length === 0) {
-        return qsTableMessageRow('暂无账号明细', 7);
+        return qsTableMessageRow('暂无账号明细', 8);
     }
 
     const hideSensitive = qsGetSensitivityHidden();
 
     return entries.map((entry, index) => {
         const tokenId = String(entry?.tokenId || '');
+        const tokenTypeRaw = String(entry?.tokenType || 'token');
+        const tokenType = tokenTypeRaw === 'geminicli' ? 'GeminiCLI' : 'Token';
         const emailRaw = String(entry?.email || '');
         const projectRaw = String(entry?.projectId || '');
         const email = hideSensitive ? qsMaskValue(emailRaw, 2, 3) : (emailRaw || '--');
@@ -321,6 +340,7 @@ function qsRenderDetailRows(entries) {
         return `
             <tr class="${entry?.isExhausted ? 'qs-detail-row-exhausted' : ''}">
                 <td>${index + 1}</td>
+                <td>${escapeHtml(tokenType)}</td>
                 <td title="${escapeHtml(emailRaw || tokenId)}">${escapeHtml(email)}</td>
                 <td title="${escapeHtml(tokenId)}">${escapeHtml(qsShortTokenId(tokenId) || '--')}</td>
                 <td>${escapeHtml(projectId)}</td>
@@ -375,6 +395,7 @@ function openQuotaSummaryDetail(modelId) {
                     <thead>
                         <tr>
                             <th>#</th>
+                            <th>来源</th>
                             <th>账号</th>
                             <th>Token</th>
                             <th>Project</th>
