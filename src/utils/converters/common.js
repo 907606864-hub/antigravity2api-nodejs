@@ -129,11 +129,30 @@ export function createThoughtPart(text, signature = null) {
  * @returns {Object} 函数调用 part
  */
 export function createFunctionCallPart(id, name, args, signature = null) {
+  let normalizedArgs = {};
+  if (typeof args === 'string') {
+    const trimmedArgs = args.trim();
+    if (trimmedArgs) {
+      try {
+        const parsed = JSON.parse(trimmedArgs);
+        if (parsed && typeof parsed === 'object') {
+          normalizedArgs = parsed;
+        } else {
+          normalizedArgs = { value: parsed };
+        }
+      } catch {
+        normalizedArgs = { raw: trimmedArgs };
+      }
+    }
+  } else if (args && typeof args === 'object') {
+    normalizedArgs = args;
+  }
+
   const part = {
     functionCall: {
       id,
       name,
-      args: typeof args === 'string' ? JSON.parse(args) : args
+      args: normalizedArgs
     }
   };
   if (signature) {
@@ -266,8 +285,12 @@ export function buildSystemPromptParts(userSystemPrompt) {
   const parts = [];
 
   // 获取各层提示词（config.js 已处理默认值，直接使用）
-  const officialPrompt = config.officialSystemPrompt;
-  const proxyPrompt = config.systemInstruction;
+  const officialPrompt = typeof config.officialSystemPrompt === 'string'
+    ? config.officialSystemPrompt
+    : String(config.officialSystemPrompt || '');
+  const proxyPrompt = typeof config.systemInstruction === 'string'
+    ? config.systemInstruction
+    : String(config.systemInstruction || '');
 
   // 处理用户提示词：可能是字符串或 parts 数组
   let userParts = [];
