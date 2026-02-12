@@ -269,17 +269,25 @@ curl http://localhost:8045/v1/chat/completions \
 所有 429/503 重试次数仅通过服务端配置控制（503 仅重试 MODEL_CAPACITY_EXHAUSTED 容量不足错误）：
 
 - 全局默认重试次数（服务端配置）：
-  - 文件：`config.json` 中的 `other.retryTimes`
+  - 文件：`config.json` 中的：
+    - `other.retryTimes`：最大重试次数
+    - `other.retryFirstDelayMinMs`：首次重试最小等待（ms）
+    - `other.retryStepMinMs`：每轮重试额外递增等待（ms）
   - 示例：
     ```json
     "other": {
       "timeout": 300000,
       "retryTimes": 3,
+      "retryFirstDelayMinMs": 0,
+      "retryStepMinMs": 0,
       "skipProjectIdFetch": false,
       "useNativeAxios": false
     }
     ```
-  - 服务器始终使用这里配置的值作为 429/503 时的重试次数（默认 3 次）。
+  - 服务器始终使用这里配置作为 429/503 重试策略：
+    - 默认 `retryTimes=3`
+    - 默认 `retryFirstDelayMinMs=0`（不额外抬高首轮下限）
+    - 默认 `retryStepMinMs=0`（不额外递增）
 
 ### 思维链响应格式
 
@@ -393,6 +401,32 @@ curl http://localhost:8045/admin/tokens \
 curl -X DELETE http://localhost:8045/admin/tokens/REFRESH_TOKEN \
   -H "Authorization: Bearer JWT_TOKEN"
 ```
+
+**Token 列表响应示例**：
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "token_id_xxx",
+      "expires_in": 3599,
+      "timestamp": 1702700000000,
+      "enable": false,
+      "projectId": "projects/xxx",
+      "email": "user@example.com",
+      "hasQuota": true,
+      "disableReason": "上游返回 403 无权限: ...",
+      "disableSource": "auto",
+      "disabledAt": 1739203200000
+    }
+  ]
+}
+```
+
+说明：
+- `disableReason`：禁用原因（启用状态时为 `null`）
+- `disableSource`：禁用来源（如 `auto` / `manual`）
+- `disabledAt`：禁用时间（毫秒时间戳，启用状态时为 `null`）
 
 ### 查看模型额度
 

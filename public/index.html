@@ -753,6 +753,18 @@
                                                 <input type="number" name="RETRY_TIMES" placeholder="0">
                                             </div>
                                         </div>
+                                        <div class="form-row-inline">
+                                            <div class="form-group compact">
+                                                <label>重试首轮最小等待(ms) <span class="help-tip"
+                                                        data-tooltip="429/503 首次重试的最小等待下限；0 表示不额外抬高">?</span></label>
+                                                <input type="number" name="RETRY_FIRST_DELAY_MIN_MS" placeholder="0">
+                                            </div>
+                                            <div class="form-group compact">
+                                                <label>重试每轮递增等待(ms) <span class="help-tip"
+                                                        data-tooltip="每次后续重试在最小等待下限上额外增加的毫秒数">?</span></label>
+                                                <input type="number" name="RETRY_STEP_MIN_MS" placeholder="0">
+                                            </div>
+                                        </div>
 
                                         <div class="form-row-inline">
                                             <div class="form-group compact">

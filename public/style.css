@@ -880,6 +880,17 @@ html.tab-logs .content {
     opacity: 0.5;
 }
 
+.token-disable-reason {
+    align-items: flex-start;
+}
+
+.token-disable-reason .info-value {
+    color: var(--warning);
+    white-space: normal;
+    word-break: break-word;
+    overflow: visible;
+}
+
 /* Token完整显示样式 */
 .token-display {
     background: var(--bg);

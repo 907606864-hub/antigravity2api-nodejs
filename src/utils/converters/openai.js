@@ -126,6 +126,36 @@ function extractImagesFromContent(content) {
   return result;
 }
 
+function extractAssistantTextContent(content) {
+  if (typeof content === 'string') return content;
+
+  if (Array.isArray(content)) {
+    let text = '';
+    for (const item of content) {
+      if (typeof item === 'string') {
+        text += item;
+        continue;
+      }
+      if (!item || typeof item !== 'object') continue;
+
+      const partType = item.type;
+      if (partType === 'text' || partType === 'output_text' || partType === 'input_text') {
+        if (typeof item.text === 'string') {
+          text += item.text;
+        }
+      }
+    }
+    return text;
+  }
+
+  if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') return content.text;
+    if (typeof content.content === 'string') return content.content;
+  }
+
+  return '';
+}
+
 function handleAssistantMessage(message, antigravityMessages, enableThinking, actualModelName, sessionId, hasTools) {
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
   const normalizedAssistantContent = normalizeContentText(message.content);

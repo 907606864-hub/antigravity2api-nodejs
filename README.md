@@ -410,6 +410,7 @@ ghcr.io/liuw1535/antigravity2api-nodejs
   - 查看所有 Token 的详细信息（Access Token 后缀、Project ID、过期时间）
   - 📊 查看模型额度：按类型分组显示（Claude/Gemini/其他），实时查看剩余额度和重置时间
   - 一键启用/禁用 Token
+  - 禁用状态可直接查看禁用原因（自动禁用/手动禁用）
   - 删除无效 Token
   - 实时刷新 Token 列表
 - ⚙️ **配置管理**：

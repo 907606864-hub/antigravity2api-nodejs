@@ -20,6 +20,38 @@ const RotationStrategy = {
   REQUEST_COUNT: 'request_count'        // 自定义次数后切换
 };
 
+const DISABLE_REASON_MAX_LENGTH = 240;
+
+function normalizeDisableReason(reason) {
+  if (reason === undefined || reason === null) return null;
+  const normalized = String(reason).replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  if (normalized.length <= DISABLE_REASON_MAX_LENGTH) return normalized;
+  return `${normalized.slice(0, DISABLE_REASON_MAX_LENGTH)}...`;
+}
+
+function getDisableStatusCode(error) {
+  const statusCode = Number(error?.statusCode || error?.status || error?.response?.status);
+  if (!Number.isFinite(statusCode) || statusCode <= 0) return null;
+  return statusCode;
+}
+
+function buildDisableReason(baseReason, error = null) {
+  const parts = [];
+  const normalizedBase = normalizeDisableReason(baseReason);
+  if (normalizedBase) parts.push(normalizedBase);
+
+  const statusCode = getDisableStatusCode(error);
+  if (statusCode) parts.push(`HTTP ${statusCode}`);
+
+  const message = normalizeDisableReason(error?.message);
+  if (message && (!normalizedBase || message !== normalizedBase)) {
+    parts.push(message);
+  }
+
+  return normalizeDisableReason(parts.join(' | '));
+}
+
 /**
  * Token 管理器
  * 负责 Token 的存储、轮询、刷新等功能
@@ -121,10 +153,13 @@ class TokenManager {
       const token = expiredTokens[index];
       const tokenId = tokenIds[index];
       if (result.status === 'fulfilled') {
-        if (result.value === 'success') {
+        if (result.value === 'success' || result.value?.action === 'success') {
           successCount++;
-        } else if (result.value === 'disable') {
-          tokensToDisable.push(token);
+        } else if (result.value === 'disable' || result.value?.action === 'disable') {
+          tokensToDisable.push({
+            token,
+            reason: result.value?.reason || null
+          });
           failCount++;
           failedTokenIds.push(tokenId);
         }
@@ -135,8 +170,8 @@ class TokenManager {
     });
 
     // 批量禁用失效的 token
-    for (const token of tokensToDisable) {
-      this.disableToken(token);
+    for (const item of tokensToDisable) {
+      this.disableToken(item.token, item.reason, 'auto');
     }
 
     const elapsed = Date.now() - startTime;
@@ -150,17 +185,21 @@ class TokenManager {
   /**
    * 安全刷新单个 token（不抛出异常）
    * @param {Object} token - Token 对象
-   * @returns {Promise<'success'|'disable'|'skip'>} 刷新结果
+   * @returns {Promise<{action:'success'}|{action:'disable', reason?:string}>} 刷新结果
    * @private
    */
   async _refreshTokenSafe(token) {
     try {
       // 并发刷新时使用静默模式，避免重复打印日志
       await this.refreshToken(token, true);
-      return 'success';
+      return { action: 'success' };
     } catch (error) {
-      if (error.statusCode === 403 || error.statusCode === 400) {
-        return 'disable';
+      const statusCode = getDisableStatusCode(error);
+      if (statusCode === 403 || statusCode === 400) {
+        return {
+          action: 'disable',
+          reason: buildDisableReason('Token 刷新失败，已自动禁用', error)
+        };
       }
       throw error;
     }
@@ -533,10 +572,15 @@ class TokenManager {
     });
   }
 
-  disableToken(token) {
-    log.warn(`禁用token ...${token.access_token.slice(-8)}`)
+  disableToken(token, reason = null, source = 'auto') {
+    const suffix = token.access_token?.slice(-8) || 'unknown';
+    const normalizedReason = normalizeDisableReason(reason);
+    log.warn(`禁用token ...${suffix}${normalizedReason ? `，原因: ${normalizedReason}` : ''}`);
     token.enable = false;
-    this.saveToFile();
+    token.disableReason = normalizedReason || token.disableReason || '自动禁用（未记录具体原因）';
+    token.disableSource = source || token.disableSource || 'auto';
+    token.disabledAt = Date.now();
+    this.saveToFile(token);
     // 清理该 token 的请求计数（避免内存泄漏）
     this.tokenRequestCounts.delete(token.refresh_token);
     this.tokens = this.tokens.filter(t => t.refresh_token !== token.refresh_token);
@@ -635,17 +679,21 @@ class TokenManager {
    * 处理 token 准备过程中的错误
    * @param {Error} error - 错误对象
    * @param {Object} token - Token 对象
-   * @returns {'disable'|'skip'} 处理结果
+   * @returns {{action:'disable', reason?:string}|{action:'skip'}} 处理结果
    * @private
    */
   _handleTokenError(error, token) {
     const suffix = token.access_token?.slice(-8) || 'unknown';
-    if (error.statusCode === 403 || error.statusCode === 400) {
+    const statusCode = getDisableStatusCode(error);
+    if (statusCode === 403 || statusCode === 400) {
       log.warn(`...${suffix}: Token 已失效或错误，已自动禁用该账号`);
-      return 'disable';
+      return {
+        action: 'disable',
+        reason: buildDisableReason('Token 已失效或错误，已自动禁用该账号', error)
+      };
     }
     log.error(`...${suffix} 操作失败:`, error.message);
-    return 'skip';
+    return { action: 'skip' };
   }
 
   /**
@@ -797,7 +845,7 @@ class TokenManager {
       try {
         const result = await this._prepareToken(token);
         if (result === 'disable') {
-          this.disableToken(token);
+          this.disableToken(token, '无法获取 Project ID（账号可能无资格）', 'auto');
           this._rebuildAvailableQuotaTokens();
           if (this.tokens.length === 0 || this.availableQuotaTokenIndices.length === 0) {
             return null;
@@ -810,8 +858,8 @@ class TokenManager {
         return token;
       } catch (error) {
         const action = this._handleTokenError(error, token);
-        if (action === 'disable') {
-          this.disableToken(token);
+        if (action.action === 'disable') {
+          this.disableToken(token, action.reason, 'auto');
           this._rebuildAvailableQuotaTokens();
           if (this.tokens.length === 0 || this.availableQuotaTokenIndices.length === 0) {
             return null;
@@ -856,7 +904,7 @@ class TokenManager {
       try {
         const result = await this._prepareToken(token);
         if (result === 'disable') {
-          this.disableToken(token);
+          this.disableToken(token, '无法获取 Project ID（账号可能无资格）', 'auto');
           if (this.tokens.length === 0) return null;
           continue;
         }
@@ -880,8 +928,8 @@ class TokenManager {
         return token;
       } catch (error) {
         const action = this._handleTokenError(error, token);
-        if (action === 'disable') {
-          this.disableToken(token);
+        if (action.action === 'disable') {
+          this.disableToken(token, action.reason, 'auto');
           if (this.tokens.length === 0) return null;
         }
         // skip: 继续尝试下一个 token
@@ -891,11 +939,36 @@ class TokenManager {
     return null;
   }
 
-  disableCurrentToken(token) {
+  disableCurrentToken(token, reason = null) {
     const found = this.tokens.find(t => t.access_token === token.access_token);
     if (found) {
-      this.disableToken(found);
+      this.disableToken(found, reason, 'auto');
     }
+  }
+
+  _normalizeUpdatePayload(updates) {
+    const nextUpdates = { ...updates };
+
+    if (!Object.prototype.hasOwnProperty.call(nextUpdates, 'enable')) {
+      return nextUpdates;
+    }
+
+    if (nextUpdates.enable === true) {
+      nextUpdates.disableReason = null;
+      nextUpdates.disableSource = null;
+      nextUpdates.disabledAt = null;
+      return nextUpdates;
+    }
+
+    if (nextUpdates.enable === false) {
+      nextUpdates.disableReason = normalizeDisableReason(nextUpdates.disableReason) || '管理员手动禁用';
+      nextUpdates.disableSource = nextUpdates.disableSource || 'manual';
+      const disabledAt = Number(nextUpdates.disabledAt);
+      nextUpdates.disabledAt = Number.isFinite(disabledAt) ? disabledAt : Date.now();
+      return nextUpdates;
+    }
+
+    return nextUpdates;
   }
 
   // API管理方法
@@ -941,13 +1014,14 @@ class TokenManager {
   async updateToken(refreshToken, updates) {
     try {
       const allTokens = await this.store.readAll();
+      const normalizedUpdates = this._normalizeUpdatePayload(updates);
 
       const index = allTokens.findIndex(t => t.refresh_token === refreshToken);
       if (index === -1) {
         return { success: false, message: 'Token不存在' };
       }
 
-      allTokens[index] = { ...allTokens[index], ...updates };
+      allTokens[index] = { ...allTokens[index], ...normalizedUpdates };
       await this.store.writeAll(allTokens);
 
       await this.reload();
@@ -990,7 +1064,12 @@ class TokenManager {
         enable: token.enable !== false,
         projectId: token.projectId || null,
         email: token.email || null,
-        hasQuota: token.hasQuota !== false
+        hasQuota: token.hasQuota !== false,
+        disableReason: token.enable === false ? normalizeDisableReason(token.disableReason) : null,
+        disableSource: token.enable === false ? (token.disableSource || null) : null,
+        disabledAt: token.enable === false && Number.isFinite(Number(token.disabledAt))
+          ? Number(token.disabledAt)
+          : null
       }));
     } catch (error) {
       log.error('获取Token列表失败:', error.message);
@@ -1027,6 +1106,7 @@ class TokenManager {
     try {
       const allTokens = await this.store.readAll();
       const salt = await this.store.getSalt();
+      const normalizedUpdates = this._normalizeUpdatePayload(updates);
 
       const index = allTokens.findIndex(token =>
         generateTokenId(token.refresh_token, salt) === tokenId
@@ -1036,7 +1116,7 @@ class TokenManager {
         return { success: false, message: 'Token不存在' };
       }
 
-      allTokens[index] = { ...allTokens[index], ...updates };
+      allTokens[index] = { ...allTokens[index], ...normalizedUpdates };
       await this.store.writeAll(allTokens);
 
       await this.reload();
