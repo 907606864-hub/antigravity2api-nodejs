@@ -144,6 +144,8 @@ async function loadConfig() {
             if (json.other) {
                 if (form.elements['TIMEOUT']) form.elements['TIMEOUT'].value = json.other.timeout ?? '';
                 if (form.elements['RETRY_TIMES']) form.elements['RETRY_TIMES'].value = json.other.retryTimes ?? '';
+                if (form.elements['RETRY_FIRST_DELAY_MIN_MS']) form.elements['RETRY_FIRST_DELAY_MIN_MS'].value = json.other.retryFirstDelayMinMs ?? '';
+                if (form.elements['RETRY_STEP_MIN_MS']) form.elements['RETRY_STEP_MIN_MS'].value = json.other.retryStepMinMs ?? '';
                 if (form.elements['SKIP_PROJECT_ID_FETCH']) form.elements['SKIP_PROJECT_ID_FETCH'].checked = json.other.skipProjectIdFetch || false;
                 if (form.elements['USE_NATIVE_AXIOS']) form.elements['USE_NATIVE_AXIOS'].checked = json.other.useNativeAxios !== false;
                 if (form.elements['USE_CONTEXT_SYSTEM_PROMPT']) form.elements['USE_CONTEXT_SYSTEM_PROMPT'].checked = json.other.useContextSystemPrompt || false;
@@ -324,6 +326,14 @@ async function saveConfig(e) {
             else if (key === 'RETRY_TIMES') {
                 const num = parseInt(value);
                 jsonConfig.other.retryTimes = Number.isNaN(num) ? undefined : num;
+            }
+            else if (key === 'RETRY_FIRST_DELAY_MIN_MS') {
+                const num = parseInt(value);
+                jsonConfig.other.retryFirstDelayMinMs = Number.isNaN(num) ? undefined : num;
+            }
+            else if (key === 'RETRY_STEP_MIN_MS') {
+                const num = parseInt(value);
+                jsonConfig.other.retryStepMinMs = Number.isNaN(num) ? undefined : num;
             }
             else if (key === 'SKIP_PROJECT_ID_FETCH' || key === 'USE_NATIVE_AXIOS' || key === 'USE_CONTEXT_SYSTEM_PROMPT' || key === 'MERGE_SYSTEM_PROMPT' || key === 'OFFICIAL_PROMPT_POSITION' || key === 'PASS_SIGNATURE_TO_CLIENT' || key === 'USE_FALLBACK_SIGNATURE' || key === 'CACHE_ALL_SIGNATURES' || key === 'CACHE_TOOL_SIGNATURES' || key === 'CACHE_IMAGE_SIGNATURES' || key === 'CACHE_THINKING' || key === 'FAKE_NON_STREAM') {
                 // 跳过，已在上面处理

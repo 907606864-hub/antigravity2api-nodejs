@@ -223,25 +223,41 @@ function getUpstreamRetryDelayMs(error) {
   return bestMs;
 }
 
-function computeBackoffMs(attempt, explicitDelayMs) {
+function computeBackoffMs(attempt, explicitDelayMs, retryConfig = {}, randomFn = Math.random) {
   // attempt starts from 0 for first call; on first retry attempt=1
   const maxMs = 20_000;
   const hasExplicit = Number.isFinite(explicitDelayMs) && explicitDelayMs !== null;
   const baseMs = hasExplicit ? Math.max(0, Math.floor(explicitDelayMs)) : 500;
   const exp = Math.min(maxMs, Math.floor(baseMs * Math.pow(2, Math.max(0, attempt - 1))));
 
+  const firstDelayMinMsRaw = hasExplicit ? 0 : 500;
+  const firstDelayMinMs = Number.isFinite(retryConfig?.firstDelayMinMs)
+    ? Math.max(0, Math.floor(retryConfig.firstDelayMinMs))
+    : firstDelayMinMsRaw;
+  const stepMinMs = Number.isFinite(retryConfig?.stepMinMs)
+    ? Math.max(0, Math.floor(retryConfig.stepMinMs))
+    : 0;
+  const progressiveMinMs = firstDelayMinMs + Math.max(0, attempt - 1) * stepMinMs;
+
   // Add small jitter to spread bursts (±20%)
-  const jitterFactor = 0.8 + Math.random() * 0.4;
+  const randomCandidate = typeof randomFn === 'function' ? randomFn() : 0.5;
+  const randomValue = Number.isFinite(randomCandidate) ? randomCandidate : 0.5;
+  const jitterFactor = 0.8 + Math.max(0, Math.min(1, randomValue)) * 0.4;
   const expJittered = Math.max(0, Math.floor(exp * jitterFactor));
 
   if (hasExplicit) {
     // Add a small safety buffer to avoid retrying slightly too early
     const buffered = Math.max(0, Math.floor(explicitDelayMs + 50));
-    return Math.min(maxMs, Math.max(expJittered, buffered));
+    return Math.min(maxMs, Math.max(expJittered, buffered, progressiveMinMs));
   }
 
   // Fallback: at least 0.5s for the first retry
-  return Math.min(maxMs, Math.max(500, expJittered));
+  return Math.min(maxMs, Math.max(500, expJittered, progressiveMinMs));
+}
+
+// 仅供测试使用
+export function __test_computeBackoffMs(attempt, explicitDelayMs, retryConfig = {}, randomFn = () => 0.5) {
+  return computeBackoffMs(attempt, explicitDelayMs, retryConfig, randomFn);
 }
 
 /**
@@ -331,6 +347,10 @@ export async function with429Retry(fn, maxRetries, options = {}, legacyOnAttempt
 
   const retries = Number.isFinite(maxRetries) && maxRetries > 0 ? Math.floor(maxRetries) : 0;
   const cooldownThreshold = config.quota?.longCooldownThreshold || LONG_COOLDOWN_THRESHOLD;
+  const retryDelayConfig = {
+    firstDelayMinMs: config.retryFirstDelayMinMs,
+    stepMinMs: config.retryStepMinMs
+  };
   let attempt = 0;
 
   // 首次执行 + 最多 retries 次重试
@@ -392,7 +412,7 @@ export async function with429Retry(fn, maxRetries, options = {}, legacyOnAttempt
         // 短时间等待，正常重试
         if (attempt < retries) {
           const nextAttempt = attempt + 1;
-          const waitMs = computeBackoffMs(nextAttempt, explicitDelayMs);
+          const waitMs = computeBackoffMs(nextAttempt, explicitDelayMs, retryDelayConfig);
           logger.warn(
             `${loggerPrefix}收到 ${errorType}，等待 ${waitMs}ms 后进行第 ${nextAttempt} 次重试（共 ${retries} 次）` +
             (explicitDelayMs !== null ? `（上游提示≈${explicitDelayMs}ms）` : '')
