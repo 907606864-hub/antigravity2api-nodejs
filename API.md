@@ -394,6 +394,32 @@ curl -X DELETE http://localhost:8045/admin/tokens/REFRESH_TOKEN \
   -H "Authorization: Bearer JWT_TOKEN"
 ```
 
+**Token 列表响应示例**：
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "token_id_xxx",
+      "expires_in": 3599,
+      "timestamp": 1702700000000,
+      "enable": false,
+      "projectId": "projects/xxx",
+      "email": "user@example.com",
+      "hasQuota": true,
+      "disableReason": "上游返回 403 无权限: ...",
+      "disableSource": "auto",
+      "disabledAt": 1739203200000
+    }
+  ]
+}
+```
+
+说明：
+- `disableReason`：禁用原因（启用状态时为 `null`）
+- `disableSource`：禁用来源（如 `auto` / `manual`）
+- `disabledAt`：禁用时间（毫秒时间戳，启用状态时为 `null`）
+
 ### 查看模型额度
 
 ```bash

@@ -919,6 +919,15 @@ function renderTokens(tokens) {
         const safeEmail = escapeHtml(token.email || '');
         const safeProjectIdJs = escapeJs(token.projectId || '');
         const safeEmailJs = escapeJs(token.email || '');
+        const disableReason = typeof token.disableReason === 'string' ? token.disableReason : '';
+        const safeDisableReason = escapeHtml(disableReason);
+        const disableReasonLabel = token.disableSource === 'auto' ? '自动禁用原因' : '禁用原因';
+        const disableReasonRow = (!token.enable && safeDisableReason)
+            ? `<div class="info-row token-disable-reason" title="${safeDisableReason}">
+                    <span class="info-label">⚠️</span>
+                    <span class="info-value">${disableReasonLabel}：${safeDisableReason}</span>
+               </div>`
+            : '';
 
         return `
         <div class="token-card ${!token.enable ? 'disabled' : ''} ${isRefreshing ? 'refreshing' : ''} ${skipAnimation ? 'no-animation' : ''}" id="card-${escapeHtml(cardId)}">
@@ -946,6 +955,7 @@ function renderTokens(tokens) {
                     <span class="info-value sensitive-info">${safeEmail || '点击设置'}</span>
                     <span class="info-edit-icon">✏️</span>
                 </div>
+                ${disableReasonRow}
             </div>
             <div class="token-id-row" title="Token ID: ${escapeHtml(tokenId)}">
                 <span class="token-id-label">🔑</span>
