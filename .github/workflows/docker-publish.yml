@@ -76,8 +76,12 @@ jobs:
           IMAGE="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}"
           BRANCH="${{ github.ref_name }}"
           ARCH="${{ matrix.arch }}"
+          SAFE_BRANCH="$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9._-]+#-#g; s#^-+##; s#-+$##')"
+          if [ -z "$SAFE_BRANCH" ]; then
+            SAFE_BRANCH="unknown"
+          fi
           
-          TAGS="${IMAGE}:${BRANCH}-${ARCH}"
+          TAGS="${IMAGE}:${SAFE_BRANCH}-${ARCH}"
           
           if [ "$BRANCH" == "main" ]; then
             TAGS="${TAGS},${IMAGE}:latest-${ARCH}"

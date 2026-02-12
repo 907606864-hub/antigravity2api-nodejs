@@ -17,30 +17,112 @@ import {
   generateGenerationConfig
 } from './common.js';
 
-function extractImagesFromContent(content) {
-  const result = { text: '', images: [] };
-  if (typeof content === 'string') {
-    result.text = content;
-    return result;
-  }
+function normalizeContentText(content) {
+  if (content === null || content === undefined) return '';
+  if (typeof content === 'string') return content;
+  if (typeof content === 'number' || typeof content === 'boolean') return String(content);
+
+  let text = '';
+  const appendFromObject = (item) => {
+    if (!item || typeof item !== 'object') return;
+    const itemType = String(item.type || '').toLowerCase();
+    if (itemType === 'text' || itemType === 'input_text' || itemType === 'output_text') {
+      if (item.text !== undefined && item.text !== null) {
+        text += String(item.text);
+      }
+      return;
+    }
+    if (typeof item.text === 'string') {
+      text += item.text;
+    } else if (typeof item.content === 'string') {
+      text += item.content;
+    }
+  };
+
   if (Array.isArray(content)) {
     for (const item of content) {
-      if (item.type === 'text') {
-        result.text += item.text;
-      } else if (item.type === 'image_url') {
-        const imageUrl = item.image_url?.url || '';
-        const match = imageUrl.match(/^data:image\/(\w+);base64,(.+)$/);
-        if (match) {
-          result.images.push({
-            inlineData: {
-              mimeType: `image/${match[1]}`,
-              data: match[2]
-            }
-          });
+      if (typeof item === 'string') text += item;
+      else if (typeof item === 'number' || typeof item === 'boolean') text += String(item);
+      else appendFromObject(item);
+    }
+    return text;
+  }
+
+  if (typeof content === 'object') {
+    appendFromObject(content);
+    return text;
+  }
+
+  return '';
+}
+
+function normalizeToolResultContent(content) {
+  if (content === null || content === undefined) return '';
+  if (typeof content === 'string') return content;
+  if (typeof content === 'number' || typeof content === 'boolean') return String(content);
+
+  if (Array.isArray(content)) {
+    return content.map((item) => {
+      if (item === null || item === undefined) return '';
+      if (typeof item === 'string') return item;
+      if (typeof item === 'number' || typeof item === 'boolean') return String(item);
+      if (typeof item === 'object') {
+        const itemText = normalizeContentText(item);
+        if (itemText) return itemText;
+        try {
+          return JSON.stringify(item);
+        } catch {
+          return String(item);
         }
       }
+      return String(item);
+    }).join('');
+  }
+
+  if (typeof content === 'object') {
+    try {
+      return JSON.stringify(content);
+    } catch {
+      return String(content);
     }
   }
+
+  return String(content);
+}
+
+function extractImageDataUrl(item) {
+  if (!item || typeof item !== 'object') return '';
+  const itemType = String(item.type || '').toLowerCase();
+  if (itemType === 'image_url') {
+    if (typeof item.image_url === 'string') return item.image_url;
+    return item.image_url?.url || '';
+  }
+  if (itemType === 'input_image') {
+    if (typeof item.image_url === 'string') return item.image_url;
+    return item.image_url?.url || '';
+  }
+  return '';
+}
+
+function extractImagesFromContent(content) {
+  const result = { text: normalizeContentText(content), images: [] };
+  if (!Array.isArray(content)) return result;
+
+  for (const item of content) {
+    const imageUrl = extractImageDataUrl(item);
+    if (!imageUrl) continue;
+
+    const match = imageUrl.match(/^data:image\/([a-z0-9.+-]+);base64,(.+)$/i);
+    if (!match) continue;
+
+    result.images.push({
+      inlineData: {
+        mimeType: `image/${match[1].toLowerCase()}`,
+        data: match[2]
+      }
+    });
+  }
+
   return result;
 }
 
@@ -76,17 +158,22 @@ function extractAssistantTextContent(content) {
 
 function handleAssistantMessage(message, antigravityMessages, enableThinking, actualModelName, sessionId, hasTools) {
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
-  const assistantTextContent = extractAssistantTextContent(message.content);
-  const hasContent = assistantTextContent.trim() !== '';
+  const normalizedAssistantContent = normalizeContentText(message.content);
+  const hasContent = normalizedAssistantContent.trim() !== '';
   const { reasoningSignature, reasoningContent, toolSignature, toolContent } = getSignatureContext(sessionId, actualModelName, hasTools);
 
   const toolCalls = hasToolCalls
-    ? message.tool_calls.map(toolCall => {
-      const safeName = processToolName(toolCall.function.name, sessionId, actualModelName);
+    ? message.tool_calls.map((toolCall, index) => {
+      const rawToolName = (typeof toolCall?.function?.name === 'string' && toolCall.function.name)
+        ? toolCall.function.name
+        : `tool_${index + 1}`;
+      const safeName = processToolName(rawToolName, sessionId, actualModelName);
+      const callId = (typeof toolCall?.id === 'string' && toolCall.id) ? toolCall.id : `tool_call_${index + 1}`;
+      const callArgs = toolCall?.function?.arguments;
       const signature = enableThinking
         ? (toolCall.thoughtSignature || toolSignature || message.thoughtSignature || reasoningSignature)
         : null;
-      return createFunctionCallPart(toolCall.id, safeName, toolCall.function.arguments, signature);
+      return createFunctionCallPart(callId, safeName, callArgs, signature);
     })
     : [];
 
@@ -116,7 +203,7 @@ function handleAssistantMessage(message, antigravityMessages, enableThinking, ac
     }
   }
   if (hasContent) {
-    const part = { text: assistantTextContent.trimEnd() };
+    const part = { text: normalizedAssistantContent.trimEnd() };
     parts.push(part);
   }
   if (!enableThinking && parts[0]) delete parts[0].thoughtSignature;
@@ -126,7 +213,8 @@ function handleAssistantMessage(message, antigravityMessages, enableThinking, ac
 
 function handleToolCall(message, antigravityMessages) {
   const functionName = findFunctionNameById(message.tool_call_id, antigravityMessages);
-  pushFunctionResponse(message.tool_call_id, functionName, message.content, antigravityMessages);
+  const normalizedResultContent = normalizeToolResultContent(message.content);
+  pushFunctionResponse(message.tool_call_id, functionName, normalizedResultContent, antigravityMessages);
 }
 
 function openaiMessageToAntigravity(openaiMessages, enableThinking, actualModelName, sessionId, hasTools) {
