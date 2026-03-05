@@ -5,8 +5,16 @@ import { getDataDir } from '../utils/paths.js';
 import { QUOTA_CACHE_TTL, QUOTA_CLEANUP_INTERVAL } from '../constants/index.js';
 import { getGroupKey } from '../utils/modelGroups.js';
 
-// 每次请求消耗的额度百分比
+// 每次请求消耗的额度百分比（按模型系列区分）
 const REQUEST_COST_PERCENT = 0.6667;
+
+// 不同模型系列的每次请求消耗百分比
+const GROUP_COST_PERCENT = {
+  claude: 0.6667,
+  gemini: 0.6667,
+  banana: 5.0,    // 图片生成模型消耗更高，约 20 次/满额
+  other: 0.6667
+};
 
 class QuotaManager {
   /**
@@ -236,20 +244,24 @@ class QuotaManager {
 
     const groupKey = getGroupKey(modelId);
 
-    // 查找该组中任意模型的额度
+    // 使用该组的最小额度来判断（与 getModelGroupQuota 逻辑一致）
+    let minRemaining = null;
+
     for (const [id, quotaData] of Object.entries(data.models)) {
       const idGroupKey = getGroupKey(id);
       if (idGroupKey === groupKey) {
         const remaining = quotaData.r || 0;
-        // 如果额度为 0，返回 false
-        if (remaining <= 0) {
-          return false;
+        if (minRemaining === null || remaining < minRemaining) {
+          minRemaining = remaining;
         }
       }
     }
 
-    // 没有找到该组的模型，或者所有模型都有额度
-    return true;
+    // 没有找到该组的模型数据，假设有额度
+    if (minRemaining === null) return true;
+
+    // 该组最小额度为 0，说明额度耗尽
+    return minRemaining > 0;
   }
 
   /**
@@ -331,14 +343,25 @@ class QuotaManager {
    * 计算预估剩余请求次数
    * @param {number} remainingFraction - 剩余额度比例 (0-1)
    * @param {number} requestCount - 已使用的请求次数
+   * @param {string} [groupKey] - 模型系列 key（用于获取对应的消耗率）
    * @returns {number} 预估剩余请求次数
    */
-  calculateEstimatedRequests(remainingFraction, requestCount = 0) {
+  calculateEstimatedRequests(remainingFraction, requestCount = 0, groupKey = null) {
+    // 根据模型系列使用不同的消耗率
+    const costPercent = (groupKey && GROUP_COST_PERCENT[groupKey]) || REQUEST_COST_PERCENT;
     // 基于当前阈值计算总的可用次数
     const percentageValue = remainingFraction * 100;
-    const totalFromThreshold = Math.floor(percentageValue / REQUEST_COST_PERCENT);
+    const totalFromThreshold = Math.floor(percentageValue / costPercent);
     // 减去已记录的请求次数
     return Math.max(0, totalFromThreshold - requestCount);
+  }
+
+  /**
+   * 获取模型系列的消耗率配置（供前端使用）
+   * @returns {Object} 各系列的消耗率
+   */
+  static getGroupCostPercent() {
+    return { ...GROUP_COST_PERCENT };
   }
 
   cleanup() {

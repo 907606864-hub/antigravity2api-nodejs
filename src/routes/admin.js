@@ -1010,7 +1010,8 @@ router.get('/tokens/:tokenId/quotas', cookieAuthMiddleware, async (req, res) => 
         // 缓存未命中或强制刷新，从API获取
         const quotas = await getModelsWithQuotas(tokenData);
         quotaManager.updateQuota(tokenId, quotas);
-        quotaData = { lastUpdated: Date.now(), models: quotas };
+        // 从缓存中获取完整数据（包含 requestCounts），而不是构造不完整的对象
+        quotaData = quotaManager.getQuota(tokenId) || { lastUpdated: Date.now(), models: quotas, requestCounts: {} };
       }
     }
 
