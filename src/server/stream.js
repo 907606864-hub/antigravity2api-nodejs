@@ -192,25 +192,33 @@ function getUpstreamRetryDelayMs(error) {
   const details = Array.isArray(inner?.details) ? inner.details : [];
 
   let bestMs = null;
+  let hasTimestamp = false;
+  
   for (const d of details) {
     if (!d || typeof d !== 'object') continue;
 
-    // google.rpc.RetryInfo: { retryDelay: "0.295285334s" }
-    const retryDelayMs = parseDurationToMs(d.retryDelay);
-    if (retryDelayMs !== null) bestMs = bestMs === null ? retryDelayMs : Math.max(bestMs, retryDelayMs);
-
-    // google.rpc.ErrorInfo metadata: { quotaResetDelay: "295.285334ms", quotaResetTimeStamp: "..." }
     const meta = d.metadata && typeof d.metadata === 'object' ? d.metadata : null;
-    const quotaResetDelayMs = parseDurationToMs(meta?.quotaResetDelay);
-    if (quotaResetDelayMs !== null) bestMs = bestMs === null ? quotaResetDelayMs : Math.max(bestMs, quotaResetDelayMs);
-
+    
+    // 优先使用 quotaResetTimeStamp（最准确）
     const ts = meta?.quotaResetTimeStamp;
-    if (typeof ts === 'string') {
+    if (typeof ts === 'string' && !hasTimestamp) {
       const t = Date.parse(ts);
       if (Number.isFinite(t)) {
         const deltaMs = Math.max(0, t - Date.now());
-        bestMs = bestMs === null ? deltaMs : Math.max(bestMs, deltaMs);
+        bestMs = deltaMs;
+        hasTimestamp = true;
       }
+    }
+
+    // 如果没有时间戳，才使用其他字段
+    if (!hasTimestamp) {
+      // 其次使用 quotaResetDelay
+      const quotaResetDelayMs = parseDurationToMs(meta?.quotaResetDelay);
+      if (quotaResetDelayMs !== null) bestMs = bestMs === null ? quotaResetDelayMs : Math.max(bestMs, quotaResetDelayMs);
+
+      // 最后使用 RetryInfo
+      const retryDelayMs = parseDurationToMs(d.retryDelay);
+      if (retryDelayMs !== null) bestMs = bestMs === null ? retryDelayMs : Math.max(bestMs, retryDelayMs);
     }
   }
 
@@ -273,28 +281,34 @@ function getUpstreamResetTimestamp(error) {
  * 判断错误是否为可重试的临时性错误（429 或 503 容量不足）
  * @param {number} status - HTTP 状态码
  * @param {Error} error - 错误对象
- * @returns {boolean}
+ * @param {number} cooldownThreshold - 冷却阈值（毫秒）
+ * @returns {{retryable: boolean, isQuotaExhausted: boolean}}
  */
-function isRetryableError(status, error) {
-  // 429 Rate Limit 总是可重试
-  if (status === 429) return true;
+function isRetryableError(status, error, cooldownThreshold) {
+  const body = extractUpstreamErrorBody(error);
+  const root = (body && typeof body === 'object') ? body : null;
+  const inner = root?.error || root;
+  const details = Array.isArray(inner?.details) ? inner.details : [];
+  const reason = details.find(d => d?.reason)?.reason;
 
-  // 503 需要检查是否为容量不足错误
-  if (status === 503) {
-    const body = extractUpstreamErrorBody(error);
-    const root = (body && typeof body === 'object') ? body : null;
-    const inner = root?.error || root;
-    const details = Array.isArray(inner?.details) ? inner.details : [];
-    
-    // 检查是否包含 MODEL_CAPACITY_EXHAUSTED
-    for (const d of details) {
-      if (d?.reason === 'MODEL_CAPACITY_EXHAUSTED') {
-        return true;
-      }
-    }
+  // 429 额度耗尽（QUOTA_EXHAUSTED）：检查恢复时间是否超过阈值
+  if (status === 429 && reason === 'QUOTA_EXHAUSTED') {
+    const delayMs = getUpstreamRetryDelayMs(error);
+    const isLongCooldown = delayMs !== null && delayMs >= cooldownThreshold;
+    return { retryable: !isLongCooldown, isQuotaExhausted: isLongCooldown };
   }
 
-  return false;
+  // 429 其他情况（如速率限制）：可重试
+  if (status === 429) {
+    return { retryable: true, isQuotaExhausted: false };
+  }
+
+  // 503 容量不足：可重试
+  if (status === 503 && reason === 'MODEL_CAPACITY_EXHAUSTED') {
+    return { retryable: true, isQuotaExhausted: false };
+  }
+
+  return { retryable: false, isQuotaExhausted: false };
 }
 
 /**
@@ -345,13 +359,14 @@ export async function with429Retry(fn, maxRetries, options = {}, legacyOnAttempt
       // 兼容多种错误格式：error.status, error.statusCode, error.response?.status
       const status = Number(error.status || error.statusCode || error.response?.status);
 
-      if (isRetryableError(status, error)) {
+      const { retryable, isQuotaExhausted } = isRetryableError(status, error, cooldownThreshold);
+
+      // 额度耗尽：禁用模型系列
+      if (isQuotaExhausted && tokenId && modelId) {
         const explicitDelayMs = getUpstreamRetryDelayMs(error);
         const upstreamResetTimestamp = getUpstreamResetTimestamp(error);
-        const errorType = status === 503 ? '503 (容量不足)' : '429';
 
-        // 检查是否是长时间冷却（额度耗尽）- 仅 429 触发模型系列禁用
-        if (status === 429 && explicitDelayMs !== null && explicitDelayMs >= cooldownThreshold && tokenId && modelId) {
+        if (explicitDelayMs !== null) {
           // 先检查是否已经被其他并发请求禁用了，避免重复处理
           if (!tokenCooldownManager.isAvailable(tokenId, modelId)) {
             // 已经在冷却中，直接抛出错误，不重复处理
@@ -384,29 +399,33 @@ export async function with429Retry(fn, maxRetries, options = {}, legacyOnAttempt
           if (finalResetTimestamp && finalResetTimestamp > Date.now()) {
             const groupKey = getGroupKey(modelId);
             const resetDate = new Date(finalResetTimestamp);
-          logger.warn(
-            `${loggerPrefix}收到 ${errorType}，恢复时间 ${Math.round(explicitDelayMs / 1000 / 60)} 分钟后，` +
+            logger.warn(
+              `${loggerPrefix}额度耗尽，恢复时间 ${Math.round(explicitDelayMs / 1000 / 60)} 分钟后，` +
               `超过阈值(${Math.round(cooldownThreshold / 1000 / 60)}分钟)，` +
               `禁用 ${groupKey} 系列直到 ${resetDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`
             );
             tokenCooldownManager.setCooldown(tokenId, modelId, finalResetTimestamp);
-            // 不重试，直接抛出错误
-            throw error;
           }
         }
+        // 额度耗尽不重试，直接抛出错误
+        throw error;
+      }
 
-        // 短时间等待，正常重试
+      // 可重试错误：短时间等待后重试
+      if (retryable && attempt < retries) {
+        const explicitDelayMs = getUpstreamRetryDelayMs(error);
+        const errorType = status === 503 ? '503 (容量不足)' : '429 (速率限制)';
         if (attempt < retries) {
-          const nextAttempt = attempt + 1;
-          const waitMs = computeBackoffMs(nextAttempt, explicitDelayMs);
-          logger.warn(
-            `${loggerPrefix}收到 ${errorType}，等待 ${waitMs}ms 后进行第 ${nextAttempt} 次重试（共 ${retries} 次）` +
-            (explicitDelayMs !== null ? `（上游提示≈${explicitDelayMs}ms）` : '')
-          );
-          await sleep(waitMs);
-          attempt = nextAttempt;
-          continue;
-        }
+        const nextAttempt = attempt + 1;
+        const waitMs = computeBackoffMs(nextAttempt, explicitDelayMs);
+        logger.warn(
+          `${loggerPrefix}收到 ${errorType}，等待 ${waitMs}ms 后进行第 ${nextAttempt} 次重试（共 ${retries} 次）` +
+          (explicitDelayMs !== null ? `（上游提示≈${explicitDelayMs}ms）` : '')
+        );
+        await sleep(waitMs);
+        attempt = nextAttempt;
+        continue;
+      }
       }
       throw error;
     }
