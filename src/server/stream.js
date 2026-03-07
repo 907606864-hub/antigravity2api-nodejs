@@ -195,23 +195,25 @@ function getUpstreamRetryDelayMs(error) {
   for (const d of details) {
     if (!d || typeof d !== 'object') continue;
 
-    // google.rpc.RetryInfo: { retryDelay: "0.295285334s" }
-    const retryDelayMs = parseDurationToMs(d.retryDelay);
-    if (retryDelayMs !== null) bestMs = bestMs === null ? retryDelayMs : Math.max(bestMs, retryDelayMs);
-
-    // google.rpc.ErrorInfo metadata: { quotaResetDelay: "295.285334ms", quotaResetTimeStamp: "..." }
+    // 优先使用 quotaResetTimeStamp（最准确）
     const meta = d.metadata && typeof d.metadata === 'object' ? d.metadata : null;
-    const quotaResetDelayMs = parseDurationToMs(meta?.quotaResetDelay);
-    if (quotaResetDelayMs !== null) bestMs = bestMs === null ? quotaResetDelayMs : Math.max(bestMs, quotaResetDelayMs);
-
     const ts = meta?.quotaResetTimeStamp;
     if (typeof ts === 'string') {
       const t = Date.parse(ts);
       if (Number.isFinite(t)) {
         const deltaMs = Math.max(0, t - Date.now());
         bestMs = bestMs === null ? deltaMs : Math.max(bestMs, deltaMs);
+        continue; // 找到时间戳后跳过其他字段
       }
     }
+
+    // 其次使用 quotaResetDelay
+    const quotaResetDelayMs = parseDurationToMs(meta?.quotaResetDelay);
+    if (quotaResetDelayMs !== null) bestMs = bestMs === null ? quotaResetDelayMs : Math.max(bestMs, quotaResetDelayMs);
+
+    // 最后使用 RetryInfo
+    const retryDelayMs = parseDurationToMs(d.retryDelay);
+    if (retryDelayMs !== null) bestMs = bestMs === null ? retryDelayMs : Math.max(bestMs, retryDelayMs);
   }
 
   // If it's the capacity exhausted case, still retry but avoid hammering.
