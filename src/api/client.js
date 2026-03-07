@@ -123,11 +123,9 @@ let modelListCacheTime = 0;
 // 使用 Object.freeze 防止意外修改，并帮助 V8 优化
 const DEFAULT_MODELS = Object.freeze([
   'claude-opus-4-6',
-  'claude-opus-4-5',
   'claude-opus-4-6-thinking',
-  'claude-sonnet-4-5-thinking',
-  'claude-sonnet-4-5',
   'claude-sonnet-4-6-thinking',
+  'claude-sonnet-4-6',
   'gemini-3.1-pro-high',
   'gemini-2.5-flash-lite',
   'gemini-3.1-flash-image',
