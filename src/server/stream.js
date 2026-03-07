@@ -359,33 +359,35 @@ export async function with429Retry(fn, maxRetries, options = {}, legacyOnAttempt
           }
 
           // 恢复时间超过阈值，触发模型系列禁用
+          // 优先使用错误响应中的时间戳（最新），其次使用缓存，最后尝试刷新
           let finalResetTimestamp = upstreamResetTimestamp;
 
-          // 尝试从 quotas.json 获取更准确的恢复时间
-          const { resetTime: quotaResetTime, hasData } = quotaManager.getModelGroupResetTime(tokenId, modelId);
-
-          if (!hasData && typeof refreshQuota === 'function') {
-            // 没有额度数据，尝试刷新
-            logger.info(`${loggerPrefix}正在获取最新额度数据以确定准确恢复时间...`);
-            try {
-              await refreshQuota();
-              const refreshed = quotaManager.getModelGroupResetTime(tokenId, modelId);
-              if (refreshed.resetTime) {
-                finalResetTimestamp = refreshed.resetTime;
+          if (!finalResetTimestamp) {
+            // 错误响应中没有时间戳，尝试从缓存获取
+            const { resetTime: quotaResetTime } = quotaManager.getModelGroupResetTime(tokenId, modelId);
+            if (quotaResetTime && quotaResetTime > Date.now()) {
+              finalResetTimestamp = quotaResetTime;
+            } else if (typeof refreshQuota === 'function') {
+              // 缓存也没有或已过期，尝试刷新
+              logger.info(`${loggerPrefix}正在获取最新额度数据以确定准确恢复时间...`);
+              try {
+                await refreshQuota();
+                const refreshed = quotaManager.getModelGroupResetTime(tokenId, modelId);
+                if (refreshed.resetTime) {
+                  finalResetTimestamp = refreshed.resetTime;
+                }
+              } catch (e) {
+                logger.warn(`${loggerPrefix}获取额度数据失败: ${e.message}`);
               }
-            } catch (e) {
-              logger.warn(`${loggerPrefix}获取额度数据失败: ${e.message}`);
             }
-          } else if (quotaResetTime) {
-            // 使用 quotas.json 中的恢复时间（通常更准确）
-            finalResetTimestamp = quotaResetTime;
           }
 
           if (finalResetTimestamp && finalResetTimestamp > Date.now()) {
             const groupKey = getGroupKey(modelId);
             const resetDate = new Date(finalResetTimestamp);
+            const actualDelayMinutes = Math.round((finalResetTimestamp - Date.now()) / 1000 / 60);
           logger.warn(
-            `${loggerPrefix}收到 ${errorType}，恢复时间 ${Math.round(explicitDelayMs / 1000 / 60)} 分钟后，` +
+            `${loggerPrefix}收到 ${errorType}，恢复时间 ${actualDelayMinutes} 分钟后，` +
               `超过阈值(${Math.round(cooldownThreshold / 1000 / 60)}分钟)，` +
               `禁用 ${groupKey} 系列直到 ${resetDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`
             );
