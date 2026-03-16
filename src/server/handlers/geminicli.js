@@ -51,10 +51,6 @@ export const handleGeminiCliRequest = async (req, res, forceFormat = null) => {
   const { format, stream, cleanedBody } = normalized;
 
   try {
-    const token = await getToken();
-    if (!token) {
-      throw new Error('没有可用的 Gemini CLI token，请在管理页面添加账号');
-    }
     const { geminiRequest, model: actualModel, features, sourceFormat } = convertToGeminiCli(cleanedBody);
 
 
@@ -82,11 +78,19 @@ export const handleGeminiCliRequest = async (req, res, forceFormat = null) => {
           responseModel
         });
 
+        // P0: 每次重试都获取新 token
+        let currentToken = null;
         await with429Retry(
-          () => generateStreamResponse(geminiRequest, token, actualModel, (data) => writer.onEvent(data)),
+          async () => {
+            currentToken = await getToken(actualModel);
+            if (!currentToken) {
+              throw new Error('没有可用的 Gemini CLI token，请在管理页面添加账号');
+            }
+            return generateStreamResponse(geminiRequest, currentToken, actualModel, (data) => writer.onEvent(data));
+          },
           safeRetries,
           '[GeminiCLI] chat.stream ',
-          () => recordRequest(token)
+          () => recordRequest(currentToken)
         );
 
         writer.finalize();
@@ -109,11 +113,19 @@ export const handleGeminiCliRequest = async (req, res, forceFormat = null) => {
       const heartbeatTimer = createHeartbeat(res);
 
       try {
+        // P0: 每次重试都获取新 token
+        let currentToken = null;
         const { content, reasoningContent, reasoningSignature, toolCalls, usage } = await with429Retry(
-          () => generateNoStreamResponse(geminiRequest, token, actualModel),
+          async () => {
+            currentToken = await getToken(actualModel);
+            if (!currentToken) {
+              throw new Error('没有可用的 Gemini CLI token，请在管理页面添加账号');
+            }
+            return generateNoStreamResponse(geminiRequest, currentToken, actualModel);
+          },
           safeRetries,
           '[GeminiCLI] chat.fake_stream ',
-          () => recordRequest(token)
+          () => recordRequest(currentToken)
         );
 
         // 缓存签名（假流式响应）
@@ -154,11 +166,19 @@ export const handleGeminiCliRequest = async (req, res, forceFormat = null) => {
       // 非流式请求
       disableTimeouts(req, res);
 
+      // P0: 每次重试都获取新 token
+      let currentToken = null;
       const { content, reasoningContent, reasoningSignature, toolCalls, usage } = await with429Retry(
-        () => generateNoStreamResponse(geminiRequest, token, actualModel),
+        async () => {
+          currentToken = await getToken(actualModel);
+          if (!currentToken) {
+            throw new Error('没有可用的 Gemini CLI token，请在管理页面添加账号');
+          }
+          return generateNoStreamResponse(geminiRequest, currentToken, actualModel);
+        },
         safeRetries,
         '[GeminiCLI] chat.no_stream ',
-        () => recordRequest(token)
+        () => recordRequest(currentToken)
       );
 
       // 处理签名：优先使用 API 返回的签名，否则使用缓存的签名

@@ -220,7 +220,49 @@ function getUpstreamRetryDelayMs(error) {
     bestMs = bestMs === null ? 1000 : Math.max(bestMs, 1000);
   }
 
+
+  // Fallback: parse human-readable "reset after XhYmZs" from error message text
+  // Handles cloudcode errors like "Your quota will reset after 17h14m45s."
+  if (bestMs === null) {
+    const candidates = [
+      inner?.message,
+      typeof body === 'string' ? body : null,
+      error?.message,
+      typeof error?.rawBody === 'string' ? error.rawBody : null
+    ];
+    for (const src of candidates) {
+      if (typeof src === 'string') {
+        const ms = parseResetAfterDurationMs(src);
+        if (ms !== null) {
+          bestMs = ms;
+          break;
+        }
+      }
+    }
+  }
+
   return bestMs;
+}
+
+/**
+ * 从错误文本中解析 "reset after XhYmZs" 格式的时长
+ * 例如 "17h14m45s" → 62085000 ms
+ * @param {string} text
+ * @returns {number|null}
+ */
+function parseResetAfterDurationMs(text) {
+  if (!text || typeof text !== 'string') return null;
+  const resetMatch = text.match(/reset\s+after\s+([\dhms\s]+)/i);
+  if (!resetMatch) return null;
+  const durationStr = resetMatch[1].trim();
+  let totalMs = 0;
+  const hMatch = durationStr.match(/(\d+)\s*h/i);
+  const mMatch = durationStr.match(/(\d+)\s*m(?!s)/i);
+  const sMatch = durationStr.match(/(\d+)\s*s/i);
+  if (hMatch) totalMs += parseInt(hMatch[1]) * 3600 * 1000;
+  if (mMatch) totalMs += parseInt(mMatch[1]) * 60 * 1000;
+  if (sMatch) totalMs += parseInt(sMatch[1]) * 1000;
+  return totalMs > 0 ? totalMs : null;
 }
 
 function computeBackoffMs(attempt, explicitDelayMs) {
@@ -292,6 +334,13 @@ function isRetryableError(status, error) {
         return true;
       }
     }
+  }
+
+  // 任何状态码：如果错误信息包含 "exhausted your capacity"，也可重试
+  const msg = error?.message || error?.rawBody || '';
+  const msgStr = typeof msg === 'string' ? msg : JSON.stringify(msg);
+  if (msgStr.includes('exhausted your capacity') || msgStr.includes('You have exhausted')) {
+    return true;
   }
 
   return false;

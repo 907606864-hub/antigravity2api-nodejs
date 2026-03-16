@@ -16,7 +16,7 @@ import { getDataDir } from '../utils/paths.js';
 // Gemini CLI API 配置
 const GEMINICLI_API_CONFIG = {
   HOST: 'cloudcode-pa.googleapis.com',
-  USER_AGENT: 'GeminiCLI/0.1.5 (Windows; AMD64)',
+  USER_AGENT: 'GeminiCLI/0.34.0 (Windows; AMD64)',
   BASE_URL: 'https://cloudcode-pa.googleapis.com'
 };
 
@@ -485,19 +485,72 @@ class GeminiCliTokenManager {
   }
 
   /**
+   * 设置 token 的临时冷却（到期后自动恢复）
+   * @param {Object} token - Token 对象
+   * @param {number} durationMs - 冷却时长（毫秒）
+   */
+  setCooldown(token, durationMs) {
+    const found = this.tokens.find(t => t.refresh_token === token.refresh_token);
+    if (found) {
+      found.cooldownUntil = Date.now() + durationMs;
+      log.warn(`[GeminiCLI] 设置 token ...${token.access_token?.slice(-8)} 冷却 ${Math.round(durationMs / 1000 / 60)} 分钟`);
+    }
+  }
+
+  /**
+   * 设置 token 的 preview 支持状态
+   * @param {Object} token - Token 对象
+   * @param {boolean} supported - 是否支持 preview 模型
+   */
+  setPreviewSupport(token, supported) {
+    const found = this.tokens.find(t => t.refresh_token === token.refresh_token);
+    if (found) {
+      found.preview = supported;
+      log.warn(`[GeminiCLI] token ...${token.access_token?.slice(-8)} preview 支持设为 ${supported}`);
+    }
+  }
+
+  /**
+   * 检查 token 是否在冷却中
+   * @param {Object} token - Token 对象
+   * @returns {boolean}
+   */
+  isInCooldown(token) {
+    if (!token.cooldownUntil) return false;
+    if (Date.now() >= token.cooldownUntil) {
+      // 冷却已过期，清除
+      delete token.cooldownUntil;
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * 获取可用的 token
+   * @param {string} [modelName] - 模型名称，用于 preview 模型筛选
    * @returns {Promise<Object|null>} token 对象
    */
-  async getToken() {
+  async getToken(modelName) {
     await this._ensureInitialized();
     if (this.tokens.length === 0) return null;
 
+    const isPreviewModel = modelName && modelName.toLowerCase().includes('preview');
     const totalTokens = this.tokens.length;
     const startIndex = this.currentIndex;
 
     for (let i = 0; i < totalTokens; i++) {
       const index = (startIndex + i) % totalTokens;
       const token = this.tokens[index];
+
+      // 跳过冷却中的 token
+      if (this.isInCooldown(token)) {
+        continue;
+      }
+
+      // preview 模型请求时，跳过已标记为不支持 preview 的 token
+      if (isPreviewModel && token.preview === false) {
+        continue;
+      }
 
       try {
         const result = await this._prepareToken(token);

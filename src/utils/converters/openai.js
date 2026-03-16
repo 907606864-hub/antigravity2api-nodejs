@@ -46,7 +46,15 @@ function extractImagesFromContent(content) {
 
 function handleAssistantMessage(message, antigravityMessages, enableThinking, actualModelName, sessionId, hasTools) {
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
-  const hasContent = message.content && message.content.trim() !== '';
+  const normalizedContent = typeof message.content === 'string'
+    ? message.content
+    : (Array.isArray(message.content)
+      ? message.content
+          .filter(item => item?.type === 'text' && typeof item.text === 'string')
+          .map(item => item.text)
+          .join('')
+      : '');
+  const hasContent = normalizedContent.trim() !== '';
   const { reasoningSignature, reasoningContent, toolSignature, toolContent } = getSignatureContext(sessionId, actualModelName, hasTools);
   
   const toolCalls = hasToolCalls
@@ -85,7 +93,7 @@ function handleAssistantMessage(message, antigravityMessages, enableThinking, ac
     }
   }
   if (hasContent) {
-    const part = { text: message.content.trimEnd() };
+    const part = { text: normalizedContent.trimEnd() };
     parts.push(part);
   }
   if (!enableThinking && parts[0]) delete parts[0].thoughtSignature;

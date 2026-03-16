@@ -43,7 +43,7 @@ function buildHeaders(token) {
   const geminicliConfig = config.geminicli?.api || {};
   return {
     'Host': geminicliConfig.host || 'cloudcode-pa.googleapis.com',
-    'User-Agent': geminicliConfig.userAgent || 'GeminiCLI/0.1.5 (Windows; AMD64)',
+    'User-Agent': geminicliConfig.userAgent || 'GeminiCLI/0.34.0 (Windows; AMD64)',
     'Authorization': `Bearer ${token.access_token}`,
     'Content-Type': 'application/json',
     'Accept-Encoding': 'gzip'
@@ -81,12 +81,16 @@ function buildRequestBody(requestBody, model, projectId) {
   };
 }
 
+// RESOURCE_EXHAUSTED 默认冷却时间（12小时，与 sukaka 保持一致）
+const RESOURCE_EXHAUSTED_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
 /**
  * 统一错误处理
  * @param {Error} error - 错误对象
  * @param {Object} token - Token 对象
+ * @param {string} [modelName] - 模型名称，用于 preview 404 判断
  */
-async function handleApiError(error, token) {
+async function handleApiError(error, token, modelName) {
   const status = getUpstreamStatus(error);
   const errorBody = await readUpstreamErrorBody(error);
   
@@ -97,8 +101,21 @@ async function handleApiError(error, token) {
     geminicliTokenManager.disableCurrentToken(token);
     throw createApiError(`该账号没有使用权限，已自动禁用。错误详情: ${errorBody}`, status, errorBody);
   }
+
+  // P1: Preview 模型 404 → 标记该凭证不支持 preview，后续跳过
+  if (status === 404 && modelName && modelName.toLowerCase().includes('preview')) {
+    logger.warn(`[GeminiCLI] Preview 模型 404，标记 token ...${token.access_token?.slice(-8)} 不支持 preview`);
+    geminicliTokenManager.setPreviewSupport(token, false);
+    throw createApiError(`Preview 模型不可用，已标记凭证。错误详情: ${errorBody}`, status, errorBody);
+  }
   
   if (status === 429) {
+    // P2: RESOURCE_EXHAUSTED 精确匹配 → 12h 冷却
+    const bodyStr = typeof errorBody === 'string' ? errorBody : JSON.stringify(errorBody || '');
+    if (bodyStr.includes('Resource has been exhausted (e.g. check quota).')) {
+      logger.warn(`[GeminiCLI] RESOURCE_EXHAUSTED 检测到，设置 token 12h 冷却`);
+      geminicliTokenManager.setCooldown(token, RESOURCE_EXHAUSTED_COOLDOWN_MS);
+    }
     throw createApiError(`请求频率过高，请稍后重试。错误详情: ${errorBody}`, status, errorBody);
   }
   
@@ -158,7 +175,7 @@ export async function generateStreamResponse(requestBody, token, model, callback
     }
   } catch (error) {
     try { processor.close(); } catch { }
-    await handleApiError(error, token);
+    await handleApiError(error, token, model);
   }
 }
 
@@ -196,7 +213,7 @@ export async function generateNoStreamResponse(requestBody, token, model) {
       dumpFinalRawResponse
     });
   } catch (error) {
-    await handleApiError(error, token);
+    await handleApiError(error, token, model);
   }
   
   // 处理 GeminiCLI 的 response 包装格式
@@ -240,10 +257,11 @@ export async function generateNoStreamResponse(requestBody, token, model) {
 
 /**
  * 获取可用的 Token
+ * @param {string} [modelName] - 模型名称，用于 preview 模型筛选
  * @returns {Promise<Object|null>} Token 对象
  */
-export async function getToken() {
-  return geminicliTokenManager.getToken();
+export async function getToken(modelName) {
+  return geminicliTokenManager.getToken(modelName);
 }
 
 /**
