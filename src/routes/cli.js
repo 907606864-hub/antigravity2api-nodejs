@@ -45,36 +45,17 @@ function getGeminiCliModels() {
     'gemini-2.5-flash',
     'gemini-3-pro-preview',
     'gemini-3-flash-preview',
-    'gemini-3.1-pro-preview'
+    'gemini-3.1-pro-preview',
+    'gemini-3.1-flash-lite-preview'
   ];
   
   const models = [];
-  const featurePrefixes = ['', '假流式/', '流式抗截断/'];
-  const thinkingSuffixes = ['', '-maxthinking', '-nothinking'];
-  const searchSuffix = '-search';
   
   for (const baseModel of baseModels) {
-    for (const prefix of featurePrefixes) {
-      // 基础模型
-      models.push(`${prefix}${baseModel}`);
-      
-      // 带 thinking 后缀
-      for (const thinkingSuffix of thinkingSuffixes) {
-        if (thinkingSuffix) {
-          models.push(`${prefix}${baseModel}${thinkingSuffix}`);
-        }
-      }
-      
-      // 带 search 后缀
-      models.push(`${prefix}${baseModel}${searchSuffix}`);
-      
-      // 带 thinking + search 组合后缀
-      for (const thinkingSuffix of thinkingSuffixes) {
-        if (thinkingSuffix) {
-          models.push(`${prefix}${baseModel}${thinkingSuffix}${searchSuffix}`);
-        }
-      }
-    }
+    // 基础模型
+    models.push(baseModel);
+    // 假流式变体
+    models.push(`假流式-${baseModel}`);
   }
   
   return models;

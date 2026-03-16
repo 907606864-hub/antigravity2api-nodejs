@@ -26,7 +26,7 @@ import { getThoughtSignatureForModel, getToolSignatureForModel } from '../utils.
 /**
  * 功能前缀列表
  */
-const FEATURE_PREFIXES = ['假流式/', '流式抗截断/'];
+const FEATURE_PREFIXES = ['假流式-', '假流式/', '流式抗截断/'];
 
 /**
  * 检查是否是假流式模型
@@ -34,7 +34,7 @@ const FEATURE_PREFIXES = ['假流式/', '流式抗截断/'];
  * @returns {boolean}
  */
 export function isFakeStreamingModel(modelName) {
-  return modelName.startsWith('假流式/');
+  return modelName.startsWith('假流式-') || modelName.startsWith('假流式/');
 }
 
 /**

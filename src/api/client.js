@@ -137,6 +137,7 @@ const DEFAULT_MODELS = Object.freeze([
   'gemini-2.5-pro',
   'gemini-2.5-flash',
   'gemini-3.1-pro-low',
+  'gemini-3.1-flash-lite-preview',
   'chat_20706',
   'rev19-uic3-1p',
   'gpt-oss-120b-medium',
